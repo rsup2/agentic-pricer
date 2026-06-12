@@ -1,0 +1,21 @@
+{
+  "consumerId": "REPLACE_ME",
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "dateOfBirth": "1985-04-12",
+  "ehrPatientId": "REPLACE_ME",
+  "serviceDate": "2026-06-01",
+  "primaryInsurance": {
+    "memberId": "REPLACE_ME",
+    "payer": "Aetna",
+    "planName": "Aetna Choice POS II",
+    "state": "TX",
+    "groupNumber": "REPLACE_ME_OR_REMOVE",
+    "insuredFirstName": "Jane",
+    "insuredLastName": "Doe"
+  },
+  "npi": "1234567890",
+  "providerLastName": "Smith",
+  "orgId": 30,
+  "hrtToSrts": [{ "hrtId": 152, "srtIds": [131] }]
+}

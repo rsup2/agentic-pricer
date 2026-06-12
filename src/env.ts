@@ -1,0 +1,34 @@
+import { z } from 'zod';
+
+/**
+ * Validated environment. Fails fast at boot if a required secret is missing,
+ * so a misconfigured Aptible app crashes loudly instead of pricing silently wrong.
+ */
+const EnvSchema = z.object({
+  ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
+  STEDI_API_KEY: z.string().min(1, 'STEDI_API_KEY is required'),
+
+  SNOWFLAKE_ACCOUNT: z.string().min(1),
+  SNOWFLAKE_USER: z.string().min(1),
+  SNOWFLAKE_PASSWORD: z.string().min(1),
+  SNOWFLAKE_WAREHOUSE: z.string().default('COMPUTE_WH'),
+  SNOWFLAKE_ROLE: z.string().default('ACCOUNTADMIN'),
+  SNOWFLAKE_DATABASE: z.string().default('PROD_CORE'),
+  SNOWFLAKE_SCHEMA: z.string().default('BASE_ATHENA'),
+
+  RESULTS_DATABASE: z.string().default('ALE'),
+  RESULTS_SCHEMA: z.string().default('ALE_DEV'),
+  RESULTS_TABLE: z.string().default('AGENTIC_PRICER_RESULTS'),
+
+  PORT: z.coerce.number().default(3000),
+  MAX_CONCURRENT_RUNS: z.coerce.number().default(8),
+  SYNTHESIS_MODEL: z.string().default('anthropic/claude-opus-4-8'),
+  RESULTS_FLUSH_INTERVAL_MS: z.coerce.number().default(5000),
+  RESULTS_FLUSH_MAX_ROWS: z.coerce.number().default(25),
+});
+
+export type Env = z.infer<typeof EnvSchema>;
+
+export const env: Env = EnvSchema.parse(process.env);
+
+export const resultsTableFqn = `${env.RESULTS_DATABASE}.${env.RESULTS_SCHEMA}.${env.RESULTS_TABLE}`;
