@@ -17,6 +17,7 @@ export type StediEligibilityInput = {
   tradingPartnerServiceId: string; // payer id; preserve leading zeros
   npi?: string;
   providerOrganizationName?: string;
+  providerFirstName?: string;
   providerLastName?: string;
   memberId: string;
   subscriberFirstName?: string;
@@ -46,6 +47,10 @@ export async function checkEligibility(
       ...(input.providerOrganizationName
         ? { organizationName: input.providerOrganizationName }
         : {}),
+      // For an NPI-1 (individual) provider, payers reject a person loop that has
+      // a last name but no first name with AAA-44 "Invalid/Missing Provider Name".
+      // Always send firstName when we have it. (organizationName is for NPI-2 orgs.)
+      ...(input.providerFirstName ? { firstName: input.providerFirstName } : {}),
       ...(input.providerLastName ? { lastName: input.providerLastName } : {}),
     },
     subscriber: {

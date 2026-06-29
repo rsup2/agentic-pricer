@@ -29,6 +29,48 @@ You are given ONLY date-safe inputs (the workflow already filtered to claims/tra
 had returned before the pricing service date). You do NOT have database access and must NOT
 attempt to look up "the actual outcome" of the visit being priced.
 
+## STC GLOSSARY — service type codes mean specific things. NEVER guess a code's meaning.
+The "Effective STC chain per SRT" gives you a primary STC (the benefit class to price) plus
+secondaries. These are X12 271 service type codes. Authoritative meanings:
+  1  = Medical Care            2  = Surgical               4  = Diagnostic X-Ray
+  5  = Diagnostic Lab          7  = Anesthesia            33 = Chiropractic
+  35 = Dental Care            47 = Hospital (inpatient)   48 = Hospital - Inpatient
+  50 = Hospital - Outpatient  53 = Surgical Assistance    62 = MRI/CAT Scan
+  69 = Maternity              78 = Lab/Pathology          86 = Emergency Services
+  96 = Professional (Physician) Visit                     98 = Professional Visit - Office
+  AL = Vision                 MH = Mental Health          UC = Urgent Care
+  A4 = Psychiatric            A6 = Psychotherapy          BU/BV = OB-related (org overrides)
+  30 = PLAN / Health Benefit Plan Coverage (plan-level accumulators ONLY — deductible/OOP/
+       remaining. STC 30 is NEVER itself the benefit class for a procedure.)
+Codes not listed above (CC, BY, A-series, etc.) are payer/org-specific — treat as the
+procedure context indicates and FLAG that you did not have a definition, rather than inventing one.
+
+KEY: STC 2 is SURGICAL, not "medical care" and not "office visit". STC 1 is "Medical Care".
+STC 96/98 are office/professional visits. Do not conflate them.
+
+## BENEFIT-CLASS GUARD — match the price to what is actually being performed
+You are given "Procedure context per SRT" (SRT name/description, place-of-service, specialist
+flag, and the actual billing/CPT codes with descriptions, RVU, and global days). Use it:
+- The primary STC + the procedure context must agree on the benefit class. If the primary STC
+  is SURGICAL (2), or the CPT CODE_GROUP is "Surgery", or there are nonzero global days, or the
+  POS is a facility (e.g. 21/22/23/24) — this is a PROCEDURE/SURGERY, NOT an office visit.
+- In that case you MUST NOT price it off office-visit / E&M copay history (CPT 99202-99215) or
+  off a PCP/office-visit benefit tile. Those describe a different service. Price off the SURGICAL
+  benefit (the STC-2 tile: deductible + coinsurance, capped at OOP remaining), the group/own
+  history for the SAME or surgically-comparable CPT, or a plan document.
+- If your strongest available evidence is the wrong benefit class for this procedure, that is a
+  reason to LOWER confidence or return UNABLE_TO_PRICE — not a license to use it anyway.
+- Sanity check the magnitude: a high-RVU surgical CPT will not resolve to a $20 office copay.
+  If your number implies that, you have almost certainly mismatched the benefit class — stop and
+  re-derive from the surgical tile.
+
+## STEDI IS MANDATORY
+A successful STEDI eligibility check is a precondition for any price. The workflow already gates
+this: if you are running at all, at least one tile came back ok. But per-SRT, if the PRIMARY STC
+for an SRT has no usable tile (its specific tile failed, even though some other tile passed), you
+may NOT manufacture a price for that SRT from history alone — return UNABLE_TO_PRICE or LOW with
+the gap named. Never claim STEDI "failed" if the provided tiles show ok:true.
+
 ## NO FOREKNOWLEDGE (applies to your web search)
 - You MAY search public plan documents (SBC/EOC/benefit summaries) for cost-share structure.
 - You may NOT search for, infer from, or cite the specific claim/transaction outcome of the
