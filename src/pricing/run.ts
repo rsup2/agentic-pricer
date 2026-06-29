@@ -50,9 +50,32 @@ export async function runPricing(
 
   // Phase 2: STEDI (depends on payer id + STC chain).
   const [stedi, stediMs] = await timed(nowMs, () =>
-    gatherStedi(dto, payerStc.payerStediId, payerStc.uniqueStcs),
+    gatherStedi(dto, payerStc.payerStediId, payerStc.uniqueStcs, {
+      npi: payerStc.providerNpi,
+      firstName: payerStc.providerFirstName,
+      lastName: payerStc.providerLastName,
+    }),
   );
   stepLatencyMs.stedi = stediMs;
+
+  // HARD GATE: a price requires a successful STEDI eligibility check. If EVERY
+  // tile came back not-ok (e.g. AAA-44 provider-name rejection fails the whole
+  // call), we do NOT run the synthesis agent and do NOT emit a price — own/group
+  // history corroboration is not a substitute for live eligibility. Every SRT is
+  // returned as UNABLE_TO_PRICE with the concrete STEDI error.
+  // (Per product rule: at least one ok tile unlocks pricing; zero ok tiles blocks it.)
+  const okTiles = stedi.results.filter((res) => res.ok);
+  if (okTiles.length === 0) {
+    const firstError =
+      stedi.results.find((res) => !res.ok)?.error ??
+      (payerStc.payerStediId
+        ? 'STEDI eligibility returned no usable tiles'
+        : 'no working payer id could be resolved for STEDI');
+    return buildStediFailureResult(dto, payerStc, stedi, firstError, {
+      stepLatencyMs,
+      totalLatencyMs: Math.round(nowMs() - t0),
+    });
+  }
 
   // Phase 3: group intelligence (depends on group # from STEDI/DTO).
   const [group, groupMs] = await timed(nowMs, () =>
@@ -81,6 +104,57 @@ export async function runPricing(
     stepLatencyMs,
     totalLatencyMs: Math.round(nowMs() - t0),
     usage,
+    modelId: env.SYNTHESIS_MODEL,
+  };
+}
+
+/**
+ * Build a no-price result when the STEDI gate trips (zero usable tiles). Every
+ * SRT in the request is returned as UNABLE_TO_PRICE with the concrete STEDI
+ * error; the synthesis agent is never called, so token usage is zero. This is
+ * the hard enforcement of "no price without a successful eligibility check" —
+ * own-history/group corroboration is deliberately NOT used as a fallback here.
+ */
+function buildStediFailureResult(
+  dto: PricingRequestDto,
+  payerStc: Awaited<ReturnType<typeof gatherPayerAndStc>>,
+  stedi: Awaited<ReturnType<typeof gatherStedi>>,
+  stediError: string,
+  timing: { stepLatencyMs: StepLatency; totalLatencyMs: number },
+): PricingRunResult {
+  void stedi; // reserved for richer per-tile reporting; gate decision already made upstream.
+  const srtPrices = dto.hrtToSrts.flatMap((h) =>
+    h.srtIds.map((srtId) => {
+      const ctx = payerStc.srtContextBySrt[srtId];
+      const chain = payerStc.stcBySrt[srtId];
+      return {
+        hrtId: h.hrtId,
+        srtId,
+        estimatedPatientResponsibility: null,
+        benefitType: null,
+        confidence: 'UNABLE_TO_PRICE' as const,
+        reasoning: `No price produced: STEDI eligibility check did not succeed (${stediError}). A successful STEDI check is required before pricing; own-history/group corroboration is not a substitute.${ctx?.name ? ` Procedure: ${ctx.name}.` : ''}${chain ? ` STC chain primary=${chain.primary}.` : ''}`,
+        sourceBreakdown: {
+          stedi: `call failed / no usable tile (${stediError})`,
+          ownHistoricals: 'not used — STEDI gate failed',
+          groupHistoricals: 'not used — STEDI gate failed',
+          webSearch: 'not attempted — STEDI gate failed',
+          allowableSource: 'N/A — unable to price',
+        },
+      };
+    }),
+  );
+
+  return {
+    output: {
+      srtPrices,
+      warnings: [
+        `STEDI gate: every eligibility tile failed (${stediError}); returned UNABLE_TO_PRICE for all ${srtPrices.length} SRT(s) without running the synthesis agent.`,
+      ],
+    },
+    stepLatencyMs: timing.stepLatencyMs,
+    totalLatencyMs: timing.totalLatencyMs,
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
     modelId: env.SYNTHESIS_MODEL,
   };
 }
@@ -118,7 +192,14 @@ function buildSynthesisPrompt(
       2,
     ),
     ``,
-    `# Effective STC chain per SRT (org overrides applied)`,
+    `# Procedure context per SRT (name, place-of-service, specialist flag, billing/CPT codes)`,
+    `# Use this to recognize WHAT is being priced. A surgical CPT (e.g. CODE_GROUP "Surgery",`,
+    `# high RVU, nonzero global days) or non-office POS is NOT an office visit — do not apply`,
+    `# office-visit / E&M copay history to it. HRT_FLAGS is intentionally omitted (not trustworthy).`,
+    JSON.stringify(payerStc.srtContextBySrt, null, 2),
+    ``,
+    `# Effective STC chain per SRT (org overrides applied). See the STC GLOSSARY in your`,
+    `# instructions for what each code MEANS — do not guess. primary is the benefit class to price.`,
     JSON.stringify(payerStc.stcBySrt, null, 2),
     ``,
     `# STEDI eligibility (one tile-set per STC; STC 30 = plan-level accumulator)`,

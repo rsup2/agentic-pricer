@@ -1,4 +1,6 @@
-import { z } from 'zod';
+// We import `z` from @hono/zod-openapi (a thin wrapper over the same Zod 3
+// instance) so these schemas double as OpenAPI definitions via `.openapi()`.
+import { z } from '@hono/zod-openapi';
 
 /**
  * The pricing request DTO — the same shape the live pricing engine receives.
@@ -33,6 +35,7 @@ export const PricingRequestDtoSchema = z
     serviceDate: z.string(), // ISO8601; the "as-of" date for foreknowledge gating
     primaryInsurance: InsuranceSchema,
     npi: z.string().optional(),
+    providerFirstName: z.string().optional(),
     providerLastName: z.string().optional(),
     orgId: z.number(),
     hrtToSrts: z.array(HrtToSrtSchema).min(1),
@@ -45,10 +48,12 @@ export const PricingRequestDtoSchema = z
 export type PricingRequestDto = z.infer<typeof PricingRequestDtoSchema>;
 
 /** The HTTP body the caller posts to /price. */
-export const PriceRequestSchema = z.object({
-  requestId: z.string().min(1),
-  dto: PricingRequestDtoSchema,
-});
+export const PriceRequestSchema = z
+  .object({
+    requestId: z.string().min(1).openapi({ example: 'req-12345' }),
+    dto: PricingRequestDtoSchema,
+  })
+  .openapi('PriceRequest');
 export type PriceRequest = z.infer<typeof PriceRequestSchema>;
 
 // --- agent output (per SRT) ---

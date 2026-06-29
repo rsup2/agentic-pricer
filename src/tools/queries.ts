@@ -11,20 +11,74 @@
  * serviceDate is passed as a YYYY-MM-DD string bind. All queries are read-only.
  */
 
-/** 1a — payer Stedi id lookup. */
+/**
+ * 1a — payer id lookup. `availity_payer_code` is a comma-separated list of payer
+ * ids to try in sequence (see gather.ts, which probes each against Stedi). The
+ * value is a string and may carry leading zeros — never coerce it to a number.
+ */
 export const PAYER_LOOKUP_SQL = `
-SELECT stedi_payer_id, name
-FROM prod_core.base_hex_pricing.payers
-WHERE LOWER(name) ILIKE LOWER(:1)
+SELECT availity_payer_code, payer_name
+FROM prod_core.base_hex_pricing.payer
+WHERE LOWER(payer_name) ILIKE LOWER(:1)
 LIMIT 5
+`;
+
+/**
+ * 1a' — default provider for an org. Stedi requires BOTH a provider id (NPI) and
+ * a name (organizationName or lastName); an NPI alone is rejected. When the
+ * request DTO omits the provider, we fall back to the org's billing provider:
+ * default_provider gives the NPI, joined to provider (on npi) for the last name.
+ * An org may have several rows (per state/practice); the caller prefers a STATE
+ * match, else the first row. :1 = org_id.
+ */
+export const DEFAULT_PROVIDER_SQL = `
+SELECT dp.npi, dp.state, p.first_name, p.last_name
+FROM prod_core.base_hex_pricing.default_provider dp
+LEFT JOIN prod_core.base_hex_pricing.provider p ON p.npi = dp.npi
+WHERE dp.org_id = :1 AND dp.npi IS NOT NULL
+`;
+
+/**
+ * Provider name by NPI. Used to backfill the provider FIRST name (and last, if
+ * the DTO omitted it) when the request supplies an NPI but no first name — Stedi
+ * rejects an NPI-1 person loop lacking a first name with AAA-44. :1 = npi.
+ */
+export const PROVIDER_BY_NPI_SQL = `
+SELECT npi, first_name, last_name
+FROM prod_core.base_hex_pricing.provider
+WHERE npi = :1
+LIMIT 1
 `;
 
 /** 1b — SRT -> STC map. :1 is a parenthesised list bind via buildInList(). */
 export function stcLookupSql(srtIdList: string): string {
   return `
-SELECT srt_id, primary_service_type_code, secondary_service_type_code
+SELECT srt_id, primary_service_type, secondary_service_type
 FROM prod_core.base_hex_pricing.srt
 WHERE srt_id IN (${srtIdList})
+`;
+}
+
+/**
+ * 1b' — human-readable procedure context per SRT: the SRT name/description,
+ * place-of-service, specialist flag, and the actual billing (CPT/HCPCS) codes
+ * with their descriptions and surgical signals (code_group/category/RVU/global
+ * days). This is what lets the synthesis agent tell a knee arthroplasty (CPT
+ * 27447, "Surgery", 90 global days) apart from a $20 office visit — without it,
+ * the model free-associates the bare STC code. One row per (srt, billing_code);
+ * SRTs with multiple CPTs produce multiple rows. NOTE: HRT_FLAGS is intentionally
+ * NOT joined here — that table is not trustworthy as a benefit-class signal.
+ */
+export function srtContextSql(srtIdList: string): string {
+  return `
+SELECT s.srt_id, s.srt_name, s.srt_description, s.pos_code, s.is_specialist,
+       s.tertiary_service_type,
+       b.billing_code, b.code_group, b.category, b.description AS billing_description,
+       b.rvu, b.global_days
+FROM prod_core.base_hex_pricing.srt s
+LEFT JOIN prod_core.base_hex_pricing.srt_to_billing_code sb ON sb.srt_id = s.srt_id
+LEFT JOIN prod_core.base_hex_pricing.billing_code b ON b.billing_code = sb.billing_code
+WHERE s.srt_id IN (${srtIdList})
 `;
 }
 
