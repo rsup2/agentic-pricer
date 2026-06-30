@@ -1,0 +1,22 @@
+name: pr-build
+
+# Gate: every PR must type-check and build before it can merge, so a tsc error
+# can never reach the Aptible deploy again. Mirrors what the Dockerfile runs
+# (npm ci + npm run build on Node 22).
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
