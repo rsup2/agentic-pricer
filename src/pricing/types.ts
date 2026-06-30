@@ -47,11 +47,30 @@ export const PricingRequestDtoSchema = z
 
 export type PricingRequestDto = z.infer<typeof PricingRequestDtoSchema>;
 
+/**
+ * Sampling provenance attached by the caller (AIR's shadow sampler). Persisted
+ * verbatim on every result row so the comparison query is single-table and can
+ * reweight by inclusion probability (Horvitz–Thompson) at analysis time — a
+ * stratified sample still yields an unbiased population error when each row is
+ * weighted by 1/inclusionProbability. All fields optional: a direct/manual
+ * /price call simply omits this object.
+ */
+export const SamplingMetaSchema = z
+  .object({
+    stratum: z.string().optional(), // e.g. "org:12|payer:aetna"
+    inclusionProbability: z.number().min(0).max(1).optional(), // sampling rate that admitted this request
+    reason: z.string().optional(), // "floor" | "tail" | ...
+    airRequestType: z.string().optional(), // PriceTreatmentsDto.requestType on the AIR side
+  })
+  .passthrough();
+export type SamplingMeta = z.infer<typeof SamplingMetaSchema>;
+
 /** The HTTP body the caller posts to /price. */
 export const PriceRequestSchema = z
   .object({
     requestId: z.string().min(1).openapi({ example: 'req-12345' }),
     dto: PricingRequestDtoSchema,
+    sampling: SamplingMetaSchema.optional(),
   })
   .openapi('PriceRequest');
 export type PriceRequest = z.infer<typeof PriceRequestSchema>;

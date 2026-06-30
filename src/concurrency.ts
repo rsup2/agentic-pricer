@@ -3,7 +3,7 @@ import { env } from './env.js';
 import { runPricing } from './pricing/run.js';
 import { resultsWriter } from './persistence/results-writer.js';
 import { toResultRows, toErrorRow } from './persistence/result-row.js';
-import type { PricingRequestDto } from './pricing/types.js';
+import type { PricingRequestDto, SamplingMeta } from './pricing/types.js';
 
 /**
  * In-app concurrency gate. Caps the number of in-flight pricing runs at
@@ -25,14 +25,18 @@ export function queueDepth(): number {
  * Fire-and-forget: enqueue a pricing run behind the gate and return immediately.
  * The result (or an error row) is persisted to Snowflake keyed by requestId.
  */
-export function enqueuePricingRun(requestId: string, dto: PricingRequestDto): void {
+export function enqueuePricingRun(
+  requestId: string,
+  dto: PricingRequestDto,
+  sampling?: SamplingMeta,
+): void {
   void limit(async () => {
     try {
       const result = await runPricing(dto);
-      resultsWriter.enqueue(toResultRows(requestId, dto, result, /* runId */ requestId));
+      resultsWriter.enqueue(toResultRows(requestId, dto, result, /* runId */ requestId, sampling));
     } catch (e) {
       // Never lose the requestId: persist an error row so the join still works.
-      resultsWriter.enqueue([toErrorRow(requestId, dto, e as Error)]);
+      resultsWriter.enqueue([toErrorRow(requestId, dto, e as Error, sampling)]);
       // eslint-disable-next-line no-console
       console.error(`[pricing-run] failed requestId=${requestId}:`, (e as Error).message);
     }

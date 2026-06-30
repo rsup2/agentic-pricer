@@ -5,6 +5,12 @@
 -- request_id is the JOIN KEY: when the real claim adjudicates later, join your
 -- engine's recorded requestId to this table to compare shadow-predicted vs actual,
 -- plus see exactly what each shadow price cost in tokens/latency.
+--
+-- LIVE LOCATION = ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (matches env.ts defaults).
+-- Verified 2026-06-30: the table exists with the full schema below, including the
+-- four SAMPLING_* columns, so the writer change needs no migration. (Confirm the
+-- Aptible RESULTS_* config points here; the repo's local .env may still say
+-- PLAYGROUND.MISC, which only affects local runs.)
 
 CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
     REQUEST_ID              STRING        NOT NULL,   -- join key to claims later
@@ -34,5 +40,19 @@ CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
     DTO_DIGEST             STRING,                    -- short hash of the request DTO for traceability
     STATUS                 STRING,                    -- COMPLETED / ERROR
     ERROR_MESSAGE          STRING,                    -- populated when STATUS = ERROR
+
+    -- sampling provenance (set by AIR's shadow sampler; null on manual/direct calls) --
+    SAMPLING_STRATUM       STRING,                    -- e.g. "org:12|payer:aetna"
+    INCLUSION_PROBABILITY  FLOAT,                     -- sampling rate that admitted this request; weight rows by 1/this
+    SAMPLING_REASON        STRING,                    -- floor / tail
+    AIR_REQUEST_TYPE       STRING,                    -- PriceTreatmentsDto.requestType on the AIR side
+
     CREATED_AT             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- If you stand up the table in another environment (e.g. ALE.ALE_PROD) that predates
+-- these columns, backfill them before the writer runs there:
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_STRATUM STRING;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS INCLUSION_PROBABILITY FLOAT;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_REASON STRING;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS AIR_REQUEST_TYPE STRING;
