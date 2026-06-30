@@ -17,17 +17,22 @@
 --           ─(ehr_slot_id)→ ehr_slot ─(ehr_visit_id = visit_id)→ art_claim
 --         art_claim.total_adjudicated_responsibility = actual patient responsibility.
 --
--- VERIFIED against DEV_CORE (read-only) on 2026-06-30:
---   tables: base_hex_pricing.priced_treatment, base_hex_pc.{bought_treatment, slot,
---           ehr_slot, art_claim}; all join columns present.
---   art_claim_status values: TRANSFERRED, ADJUSTED, IN_PROGRESS, RERUN_NEEDED,
---           NOT_RELEVANT, MANUAL_REVIEW, SELF_PAY  -> terminal/comparable = the first two.
---   priced_treatment HAS duplicate (request_id, hrt_id) rows (re-pricing attempts) —
---           hence the dedupe below; without it the weighted aggregates double-count.
+-- VERIFIED end-to-end against PROD (read-only) on 2026-06-30 — 14 live matches:
+--   tables: PROD_CORE.base_hex_pricing.priced_treatment, PROD_CORE.base_hex_pc.
+--           {bought_treatment, slot, ehr_slot, art_claim}; all join columns present.
+--   priced_treatment AND art_claim both have duplicate keys in prod (re-pricing
+--           attempts / multiple claims per visit) — hence the dedupe below; without
+--           it the weighted aggregates double-count.
+--   art_claim_status (prod): NOT_RELEVANT, TRANSFERRED, UNMATCHED, NO_ACTION,
+--           PARTIAL_TRANSFER, SELF_PAY, ADJUSTED, RERUN_NEEDED, MANUAL_REVIEW,
+--           PARTIAL_TRANSFER_INCREMENTAL_COLLECTION, CANCELLED, NOT_COLLECTED, ...
+--           Comparable/terminal = TRANSFERRED + ADJUSTED (settled). See TODO at the
+--           claim CTE — Alex to confirm whether PARTIAL_TRANSFER* should count.
 --
--- DATABASE: DEV_CORE pairs with ALE.ALE_DEV (the pilot). For prod, swap every
--- DEV_CORE -> PROD_CORE and ALE_DEV -> ALE_PROD. (Assumes ALE and *_CORE live in the
--- same Snowflake account, as they do for Superscript.)
+-- EVERYTHING IS PROD: shadow results live in PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS
+-- (the deployed location, ~38 rows), joined to PROD_CORE. Run under a role that can
+-- read BOTH PLAYGROUND and PROD_CORE (ACCOUNTADMIN works; FR_CORE_READONLY does NOT —
+-- it can't see PLAYGROUND). Assumes both DBs are in the same Snowflake account.
 --
 -- GRAIN: our estimate is per-SRT; priced_treatment.price is per-treatment (HRT);
 -- art_claim is per-claim/visit. We roll the shadow estimate up to HRT (matches
@@ -56,7 +61,7 @@ WITH shadow AS (
         ANY_VALUE(SAMPLING_STRATUM)                   AS stratum,
         COALESCE(ANY_VALUE(INCLUSION_PROBABILITY), 1) AS p,   -- weight = 1/p
         BOOLOR_AGG(CONFIDENCE = 'UNABLE_TO_PRICE')    AS any_unpriced
-    FROM ALE.ALE_DEV.AGENTIC_PRICER_RESULTS
+    FROM PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS
     WHERE STATUS = 'COMPLETED'
     GROUP BY REQUEST_ID, HRT_ID
 ),
@@ -65,7 +70,7 @@ WITH shadow AS (
 -- duplicate rows from re-pricing attempts (verified), so take the latest.
 air AS (
     SELECT request_id, hrt_id, priced_treatment_id, price AS air_price
-    FROM DEV_CORE.base_hex_pricing.priced_treatment
+    FROM PROD_CORE.base_hex_pricing.priced_treatment
     WHERE request_id IS NOT NULL AND hrt_id IS NOT NULL
     QUALIFY ROW_NUMBER() OVER (
         PARTITION BY request_id, hrt_id ORDER BY created_at DESC
@@ -74,13 +79,16 @@ air AS (
 
 -- The adjudicated claim, ONE row per (visit_id, org_id), restricted to terminal
 -- statuses so we never compare against a still-in-flight responsibility.
--- TODO(alex): confirm the terminal set — TRANSFERRED/ADJUSTED are the settled ones;
--- IN_PROGRESS/RERUN_NEEDED/MANUAL_REVIEW are not final; NOT_RELEVANT/SELF_PAY aren't
--- normal adjudicated claims.
+-- TODO(alex): confirm the terminal set against the prod vocab. TRANSFERRED (240k) +
+-- ADJUSTED (4k) are settled. EXCLUDED: NOT_RELEVANT/UNMATCHED/NO_ACTION/CANCELLED/
+-- NOT_COLLECTED (no comparable adjudication), RERUN_NEEDED/MANUAL_REVIEW (not final),
+-- SELF_PAY (no insurance adjudication). OPEN QUESTION: should PARTIAL_TRANSFER and
+-- PARTIAL_TRANSFER_INCREMENTAL_COLLECTION count? They carry a responsibility but may
+-- not be final — left OUT for now (conservative).
 claim AS (
     SELECT visit_id, org_id, claim_id, art_claim_status,
            total_adjudicated_responsibility
-    FROM DEV_CORE.base_hex_pc.art_claim
+    FROM PROD_CORE.base_hex_pc.art_claim
     WHERE art_claim_status IN ('TRANSFERRED', 'ADJUSTED')
       AND total_adjudicated_responsibility IS NOT NULL
     QUALIFY ROW_NUMBER() OVER (
@@ -107,9 +115,9 @@ joined AS (
     JOIN air a
       ON a.request_id = s.REQUEST_ID
      AND a.hrt_id     = s.HRT_ID
-    JOIN DEV_CORE.base_hex_pc.bought_treatment bt ON bt.priced_treatment_id = a.priced_treatment_id
-    JOIN DEV_CORE.base_hex_pc.slot             sl ON sl.slot_id             = bt.slot_id
-    JOIN DEV_CORE.base_hex_pc.ehr_slot         es ON es.ehr_slot_id         = sl.ehr_slot_id
+    JOIN PROD_CORE.base_hex_pc.bought_treatment bt ON bt.priced_treatment_id = a.priced_treatment_id
+    JOIN PROD_CORE.base_hex_pc.slot             sl ON sl.slot_id             = bt.slot_id
+    JOIN PROD_CORE.base_hex_pc.ehr_slot         es ON es.ehr_slot_id         = sl.ehr_slot_id
     JOIN claim                                 c  ON c.visit_id::varchar    = es.ehr_visit_id::varchar
                                                  AND c.org_id::varchar      = es.org_id::varchar
     WHERE s.shadow_price IS NOT NULL
@@ -139,7 +147,7 @@ ORDER BY shadow_conf_rank DESC;
 -- ── Per-SRT / per-CPT variant (finer grain, for multi-treatment visits) ─────────
 -- Replace the claim-level actual with ART's CPT-line responsibility and join on the
 -- SRT's billing code instead of rolling up to HRT:
---   ... JOIN DEV_CORE.base_hex_pricing.srt_to_billing_code sb ON sb.srt_id = r.SRT_ID
+--   ... JOIN PROD_CORE.base_hex_pricing.srt_to_billing_code sb ON sb.srt_id = r.SRT_ID
 --       JOIN <art_claim_cpt_line> cl ON cl.claim_id = c.claim_id AND cl.procedure_code = sb.billing_code
 --   compare r.ESTIMATED_PATIENT_RESP (per SRT) against cl.adjudicated_patient_responsibility.
 -- Use when one visit bundles several treatments and the claim total can't be split.
