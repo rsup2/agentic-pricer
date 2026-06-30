@@ -7,42 +7,40 @@
 --      returned claim up with the price entity and the priced treatment, then compare
 --      the agentic predicted price against the actual price on the returned claim.
 --
--- That existing chain is the dbt model `consolidated_cross.pricing_observability`.
--- `priced_treatment` is the anchor: it carries REQUEST_ID (our exact join key),
--- `price` (AIR's predicted price), `pricing_entity_id` (per-SRT), and links forward
--- to the bought treatment, slot, and ART claim. So AIR's price + the actual
--- adjudicated responsibility are BOTH already in Snowflake, keyed off REQUEST_ID —
--- no Mongo lookup needed.
+-- The chain mirrors the dbt model `consolidated_cross.pricing_observability`.
+-- `priced_treatment` is the anchor: it carries REQUEST_ID (our join key), `price`
+-- (AIR's predicted price), and links forward to the bought treatment, slot, and ART
+-- claim. So AIR's price + the actual adjudicated responsibility are both already in
+-- Snowflake, keyed off REQUEST_ID — no Mongo lookup needed.
 --
--- Chain (lifted from pricing_observability, minus its sim_results anchor):
---   priced_treatment ─(priced_treatment_id)→ bought_treatment ─(slot_id)→ slot
---     ─(ehr_slot_id)→ ehr_slot ─(ehr_visit_id = visit_id)→ art_claim
---   art_claim.total_adjudicated_responsibility  =  the actual patient responsibility.
+-- Chain:  priced_treatment ─(priced_treatment_id)→ bought_treatment ─(slot_id)→ slot
+--           ─(ehr_slot_id)→ ehr_slot ─(ehr_visit_id = visit_id)→ art_claim
+--         art_claim.total_adjudicated_responsibility = actual patient responsibility.
 --
--- ── GRAIN ─────────────────────────────────────────────────────────────────────
--- Our estimate is per-SRT; priced_treatment.price is per-treatment (HRT);
--- art_claim.total_adjudicated_responsibility is per-claim/visit. This query rolls
--- the shadow estimate up to the HRT grain so it matches priced_treatment cleanly,
--- and compares against the claim total — EXACT when one claim = one treatment (the
--- common case). For multi-treatment visits, attribute per-SRT/CPT using ART's
--- CPT-line data instead of the claim total (see the per-CPT note at the bottom).
+-- VERIFIED against DEV_CORE (read-only) on 2026-06-30:
+--   tables: base_hex_pricing.priced_treatment, base_hex_pc.{bought_treatment, slot,
+--           ehr_slot, art_claim}; all join columns present.
+--   art_claim_status values: TRANSFERRED, ADJUSTED, IN_PROGRESS, RERUN_NEEDED,
+--           NOT_RELEVANT, MANUAL_REVIEW, SELF_PAY  -> terminal/comparable = the first two.
+--   priced_treatment HAS duplicate (request_id, hrt_id) rows (re-pricing attempts) —
+--           hence the dedupe below; without it the weighted aggregates double-count.
 --
--- ── REQUEST_ID PROVENANCE ───────────────────────────────────────────────────────
--- This join is reliable for requests that arrived with the gateway's REQUEST_ID
--- (production traffic). AIR backfills a uuid only when none was supplied; those
--- won't match priced_treatment.request_id (the gateway's), so they simply don't
--- join — acceptable, since prod gateway calls always carry a request id.
+-- DATABASE: DEV_CORE pairs with ALE.ALE_DEV (the pilot). For prod, swap every
+-- DEV_CORE -> PROD_CORE and ALE_DEV -> ALE_PROD. (Assumes ALE and *_CORE live in the
+-- same Snowflake account, as they do for Superscript.)
 --
--- ── SIMS (Alex's caveat) ──────────────────────────────────────────────────────
--- You can get an earlier signal by comparing against already-run sims instead of
--- waiting for live claims, BUT Alex flagged foreknowledge contamination: if the
--- exact claim ground truth already exists, the agent may surface/use it despite
--- instructions. Live claims (this query) are the contamination-free ground truth;
--- treat any sim-based number as indicative only.
+-- GRAIN: our estimate is per-SRT; priced_treatment.price is per-treatment (HRT);
+-- art_claim is per-claim/visit. We roll the shadow estimate up to HRT (matches
+-- priced_treatment) and compare to the claim total — exact when one claim = one
+-- treatment. For multi-treatment visits use ART CPT-line data (see note at bottom).
 --
--- Schemas: priced_treatment -> base_hex_pricing; bought_treatment/slot/ehr_slot ->
--- base_hex_pc; art_claim -> the consolidated/ART schema. Confirm the materialized
--- DBs in your dbt target; all live in the same Snowflake account as ALE.
+-- REQUEST_ID PROVENANCE: reliable for requests that arrived with the gateway's
+-- REQUEST_ID (prod traffic). AIR backfills a uuid only when none was supplied; those
+-- don't match priced_treatment.request_id and simply don't join.
+--
+-- SIMS (Alex's caveat): comparing against already-run sims gives an earlier signal
+-- but risks foreknowledge contamination. Live claims (this query) are the clean
+-- ground truth; treat any sim-based number as indicative only.
 
 WITH shadow AS (
     -- roll our per-SRT estimates up to the treatment (HRT) grain.
@@ -63,6 +61,33 @@ WITH shadow AS (
     GROUP BY REQUEST_ID, HRT_ID
 ),
 
+-- AIR's predicted price, ONE row per (request_id, hrt_id): priced_treatment has
+-- duplicate rows from re-pricing attempts (verified), so take the latest.
+air AS (
+    SELECT request_id, hrt_id, priced_treatment_id, price AS air_price
+    FROM DEV_CORE.base_hex_pricing.priced_treatment
+    WHERE request_id IS NOT NULL AND hrt_id IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY request_id, hrt_id ORDER BY created_at DESC
+    ) = 1
+),
+
+-- The adjudicated claim, ONE row per (visit_id, org_id), restricted to terminal
+-- statuses so we never compare against a still-in-flight responsibility.
+-- TODO(alex): confirm the terminal set — TRANSFERRED/ADJUSTED are the settled ones;
+-- IN_PROGRESS/RERUN_NEEDED/MANUAL_REVIEW are not final; NOT_RELEVANT/SELF_PAY aren't
+-- normal adjudicated claims.
+claim AS (
+    SELECT visit_id, org_id, claim_id, art_claim_status,
+           total_adjudicated_responsibility
+    FROM DEV_CORE.base_hex_pc.art_claim
+    WHERE art_claim_status IN ('TRANSFERRED', 'ADJUSTED')
+      AND total_adjudicated_responsibility IS NOT NULL
+    QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY visit_id, org_id ORDER BY created_at DESC
+    ) = 1
+),
+
 joined AS (
     SELECT
         s.REQUEST_ID,
@@ -71,26 +96,24 @@ joined AS (
         s.sampling_reason,
         s.p,
         s.shadow_conf_rank,
-        s.any_unpriced,
         s.shadow_price,
-        pt.price                            AS air_price,                   -- AIR's prediction
-        ac.total_adjudicated_responsibility AS actual_pr,                   -- ground truth
-        ac.claim_id,
-        ac.art_claim_status,
-        (s.shadow_price - ac.total_adjudicated_responsibility) AS shadow_err, -- + over / - UNDERprice (costly)
-        (pt.price        - ac.total_adjudicated_responsibility) AS air_err
+        a.air_price,                                              -- AIR's prediction
+        c.total_adjudicated_responsibility AS actual_pr,          -- ground truth
+        c.claim_id,
+        c.art_claim_status,
+        (s.shadow_price - c.total_adjudicated_responsibility) AS shadow_err, -- + over / - UNDERprice (costly)
+        (a.air_price    - c.total_adjudicated_responsibility) AS air_err
     FROM shadow s
-    JOIN base_hex_pricing.priced_treatment pt
-      ON pt.request_id = s.REQUEST_ID
-     AND pt.hrt_id     = s.HRT_ID
-    JOIN base_hex_pc.bought_treatment bt ON bt.priced_treatment_id = pt.priced_treatment_id
-    JOIN base_hex_pc.slot             sl ON sl.slot_id             = bt.slot_id
-    JOIN base_hex_pc.ehr_slot         es ON es.ehr_slot_id         = sl.ehr_slot_id
-    JOIN art_claim                    ac ON ac.visit_id::varchar   = es.ehr_visit_id::varchar
-                                        AND ac.org_id::varchar     = es.org_id::varchar
-    WHERE ac.total_adjudicated_responsibility IS NOT NULL          -- claim has returned/adjudicated
-      AND s.shadow_price IS NOT NULL
-      AND NOT s.any_unpriced                                        -- only treatments the agent actually priced
+    JOIN air a
+      ON a.request_id = s.REQUEST_ID
+     AND a.hrt_id     = s.HRT_ID
+    JOIN DEV_CORE.base_hex_pc.bought_treatment bt ON bt.priced_treatment_id = a.priced_treatment_id
+    JOIN DEV_CORE.base_hex_pc.slot             sl ON sl.slot_id             = bt.slot_id
+    JOIN DEV_CORE.base_hex_pc.ehr_slot         es ON es.ehr_slot_id         = sl.ehr_slot_id
+    JOIN claim                                 c  ON c.visit_id::varchar    = es.ehr_visit_id::varchar
+                                                 AND c.org_id::varchar      = es.org_id::varchar
+    WHERE s.shadow_price IS NOT NULL
+      AND NOT s.any_unpriced                                    -- only treatments the agent actually priced
 )
 
 -- Population-level, inclusion-probability-weighted scorecard. Slice by confidence
@@ -116,7 +139,7 @@ ORDER BY shadow_conf_rank DESC;
 -- ── Per-SRT / per-CPT variant (finer grain, for multi-treatment visits) ─────────
 -- Replace the claim-level actual with ART's CPT-line responsibility and join on the
 -- SRT's billing code instead of rolling up to HRT:
---   ... JOIN prod_core.base_hex_pricing.srt_to_billing_code sb ON sb.srt_id = r.SRT_ID
---       JOIN <art_claim_cpt_line> cl ON cl.claim_id = ac.claim_id AND cl.procedure_code = sb.billing_code
+--   ... JOIN DEV_CORE.base_hex_pricing.srt_to_billing_code sb ON sb.srt_id = r.SRT_ID
+--       JOIN <art_claim_cpt_line> cl ON cl.claim_id = c.claim_id AND cl.procedure_code = sb.billing_code
 --   compare r.ESTIMATED_PATIENT_RESP (per SRT) against cl.adjudicated_patient_responsibility.
--- Use when one visit bundles several treatments and the claim total can't be split cleanly.
+-- Use when one visit bundles several treatments and the claim total can't be split.
