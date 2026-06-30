@@ -96,6 +96,14 @@ const priceRoute = createRoute({
         },
       },
     },
+    401: {
+      description: 'Missing or invalid bearer token (only when SHADOW_API_KEY is set)',
+      content: {
+        'application/json': {
+          schema: z.object({ error: z.string() }),
+        },
+      },
+    },
   },
 });
 app.openapi(priceRoute, (c) => {
