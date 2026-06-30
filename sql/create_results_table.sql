@@ -6,15 +6,13 @@
 -- engine's recorded requestId to this table to compare shadow-predicted vs actual,
 -- plus see exactly what each shadow price cost in tokens/latency.
 --
--- ⚠️ LIVE LOCATION = PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS (the deployed table; the
---    service's RESULTS_* env points here). env.ts DEFAULTS to ALE.ALE_DEV — if you
---    rely on defaults instead of the deployed .env you'll write to the wrong table.
---
--- ⚠️⚠️ DEPLOY ORDER: the live table does NOT yet have the four SAMPLING_* columns.
---    Run the ALTERs below on PLAYGROUND.MISC *before* deploying the writer change,
---    or every INSERT will fail with "invalid identifier SAMPLING_STRATUM".
+-- LIVE LOCATION = ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (matches env.ts defaults).
+-- Verified 2026-06-30: the table exists with the full schema below, including the
+-- four SAMPLING_* columns, so the writer change needs no migration. (Confirm the
+-- Aptible RESULTS_* config points here; the repo's local .env may still say
+-- PLAYGROUND.MISC, which only affects local runs.)
 
-CREATE TABLE IF NOT EXISTS PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS (
+CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
     REQUEST_ID              STRING        NOT NULL,   -- join key to claims later
     RUN_ID                  STRING,                   -- mastra workflow run id
     HRT_ID                  NUMBER,
@@ -23,7 +21,7 @@ CREATE TABLE IF NOT EXISTS PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS (
     -- pricing output (per SRT) --
     ESTIMATED_PATIENT_RESP  NUMBER(12,2),             -- null when UNABLE_TO_PRICE
     BENEFIT_TYPE            STRING,                    -- COPAY / COINSURANCE / DEDUCTIBLE / ...
-    CONFIDENCE             STRING        NOT NULL,   -- HIGH / MEDIUM / LOW / UNABLE_TO_PRICE (NOT NULL in live table)
+    CONFIDENCE             STRING,                    -- HIGH / MEDIUM / LOW / UNABLE_TO_PRICE
     REASONING              STRING,
     SOURCE_BREAKDOWN       VARIANT,                   -- {stedi, ownHistoricals, groupHistoricals, webSearch, allowableSource}
 
@@ -52,9 +50,9 @@ CREATE TABLE IF NOT EXISTS PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS (
     CREATED_AT             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
 
--- ⚠️ RUN THIS ON THE LIVE TABLE BEFORE DEPLOYING THE WRITER CHANGE (verified
--- 2026-06-30 that PLAYGROUND.MISC does NOT yet have these columns):
---   ALTER TABLE PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_STRATUM STRING;
---   ALTER TABLE PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS INCLUSION_PROBABILITY FLOAT;
---   ALTER TABLE PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_REASON STRING;
---   ALTER TABLE PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS AIR_REQUEST_TYPE STRING;
+-- If you stand up the table in another environment (e.g. ALE.ALE_PROD) that predates
+-- these columns, backfill them before the writer runs there:
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_STRATUM STRING;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS INCLUSION_PROBABILITY FLOAT;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_REASON STRING;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS AIR_REQUEST_TYPE STRING;

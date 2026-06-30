@@ -17,9 +17,11 @@
 --           ─(ehr_slot_id)→ ehr_slot ─(ehr_visit_id = visit_id)→ art_claim
 --         art_claim.total_adjudicated_responsibility = actual patient responsibility.
 --
--- VERIFIED end-to-end against PROD (read-only) on 2026-06-30 — 14 live matches:
+-- VERIFIED against PROD (read-only) on 2026-06-30:
 --   tables: PROD_CORE.base_hex_pricing.priced_treatment, PROD_CORE.base_hex_pc.
 --           {bought_treatment, slot, ehr_slot, art_claim}; all join columns present.
+--           The full chain compiled + ran live (14 matches against the earlier
+--           PLAYGROUND.MISC results set, since migrated to ALE.ALE_DEV).
 --   priced_treatment AND art_claim both have duplicate keys in prod (re-pricing
 --           attempts / multiple claims per visit) — hence the dedupe below; without
 --           it the weighted aggregates double-count.
@@ -29,10 +31,10 @@
 --           Comparable/terminal = TRANSFERRED + ADJUSTED (settled). See TODO at the
 --           claim CTE — Alex to confirm whether PARTIAL_TRANSFER* should count.
 --
--- EVERYTHING IS PROD: shadow results live in PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS
--- (the deployed location, ~38 rows), joined to PROD_CORE. Run under a role that can
--- read BOTH PLAYGROUND and PROD_CORE (ACCOUNTADMIN works; FR_CORE_READONLY does NOT —
--- it can't see PLAYGROUND). Assumes both DBs are in the same Snowflake account.
+-- EVERYTHING IS PROD: shadow results live in ALE.ALE_DEV.AGENTIC_PRICER_RESULTS
+-- (matches env.ts defaults), joined to PROD_CORE. Run under a role that can read BOTH
+-- ALE and PROD_CORE (ACCOUNTADMIN works; FR_CORE_READONLY does NOT — it can't see
+-- ALE). Assumes both DBs are in the same Snowflake account.
 --
 -- GRAIN: our estimate is per-SRT; priced_treatment.price is per-treatment (HRT);
 -- art_claim is per-claim/visit. We roll the shadow estimate up to HRT (matches
@@ -61,7 +63,7 @@ WITH shadow AS (
         ANY_VALUE(SAMPLING_STRATUM)                   AS stratum,
         COALESCE(ANY_VALUE(INCLUSION_PROBABILITY), 1) AS p,   -- weight = 1/p
         BOOLOR_AGG(CONFIDENCE = 'UNABLE_TO_PRICE')    AS any_unpriced
-    FROM PLAYGROUND.MISC.AGENTIC_PRICER_RESULTS
+    FROM ALE.ALE_DEV.AGENTIC_PRICER_RESULTS
     WHERE STATUS = 'COMPLETED'
     GROUP BY REQUEST_ID, HRT_ID
 ),
