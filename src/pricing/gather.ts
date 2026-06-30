@@ -282,18 +282,23 @@ async function pickWorkingPayerId(
   return candidates[0] ?? null;
 }
 
-/** 1c: own patient claim history (date-gated). Returns rows + a flag for emptiness. */
+/**
+ * 1c: own patient claim history (date-gated), from the cross-EHR canonical model.
+ * Keyed by insurance member id (works for Athena AND Experity/MedRite — the old
+ * ehrPatientId/base_athena path had no Experity data and crashed on its GUID ids).
+ */
 export async function gatherPatientHistory(dto: PricingRequestDto): Promise<{
   rows: Record<string, unknown>[];
   note: string;
 }> {
-  if (!dto.ehrPatientId) {
-    return { rows: [], note: "no ehrPatientId on DTO — patient history skipped" };
+  const memberId = dto.primaryInsurance?.memberId;
+  if (!memberId) {
+    return { rows: [], note: "no member id on DTO — patient history skipped" };
   }
   const rows = await executeQuery(
-    patientHistorySql({ serviceDate: toYmd(dto.serviceDate), orgId: dto.orgId, ehrPatientId: dto.ehrPatientId }),
+    patientHistorySql({ serviceDate: toYmd(dto.serviceDate), memberId }),
   );
-  return { rows, note: rows.length ? `${rows.length} prior closed-claim rows` : "no prior claims (new patient)" };
+  return { rows, note: rows.length ? `${rows.length} prior claim lines (member)` : "no prior claims (new member)" };
 }
 
 /** Step 2: STEDI eligibility for all unique STCs + STC 30. */
@@ -342,7 +347,7 @@ export async function gatherGroupIntelligence(
     return { rows: [], note: "no group number available — group intelligence skipped" };
   }
   const rows = await executeQuery(
-    groupIntelligenceSql({ serviceDate: toYmd(dto.serviceDate), orgId: dto.orgId, groupNumber }),
+    groupIntelligenceSql({ serviceDate: toYmd(dto.serviceDate), groupNumber }),
   );
   // Cap to ~200 rows, most recent first, to bound synthesis token cost.
   const capped = rows.slice(0, 200);
