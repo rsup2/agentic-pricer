@@ -100,9 +100,9 @@ const priceRoute = createRoute({
 });
 app.openapi(priceRoute, (c) => {
   // Body is already validated against PriceRequestSchema by the OpenAPI route.
-  const { requestId, dto } = c.req.valid('json');
+  const { requestId, dto, sampling } = c.req.valid('json');
   // fire-and-forget: enqueue behind the concurrency gate, return immediately.
-  enqueuePricingRun(requestId, dto);
+  enqueuePricingRun(requestId, dto, sampling);
   return c.json({ requestId, status: 'accepted' as const, queueDepth: queueDepth() }, 202);
 });
 

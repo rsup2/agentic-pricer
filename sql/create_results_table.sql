@@ -34,5 +34,18 @@ CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
     DTO_DIGEST             STRING,                    -- short hash of the request DTO for traceability
     STATUS                 STRING,                    -- COMPLETED / ERROR
     ERROR_MESSAGE          STRING,                    -- populated when STATUS = ERROR
+
+    -- sampling provenance (set by AIR's shadow sampler; null on manual/direct calls) --
+    SAMPLING_STRATUM       STRING,                    -- e.g. "org:12|payer:aetna"
+    INCLUSION_PROBABILITY  FLOAT,                     -- sampling rate that admitted this request; weight rows by 1/this
+    SAMPLING_REASON        STRING,                    -- floor / tail
+    AIR_REQUEST_TYPE       STRING,                    -- PriceTreatmentsDto.requestType on the AIR side
+
     CREATED_AT             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
+
+-- If the table already exists from before these columns were added, run:
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_STRATUM STRING;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS INCLUSION_PROBABILITY FLOAT;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS SAMPLING_REASON STRING;
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS AIR_REQUEST_TYPE STRING;

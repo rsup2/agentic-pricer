@@ -59,6 +59,7 @@ class ResultsWriter {
       'CONFIDENCE', 'REASONING', 'SOURCE_BREAKDOWN', 'WARNINGS', 'TOTAL_LATENCY_MS',
       'STEP_LATENCY_MS', 'INPUT_TOKENS', 'OUTPUT_TOKENS', 'CACHE_READ_TOKENS',
       'ESTIMATED_COST_USD', 'MODEL_ID', 'PRICING_DATE', 'DTO_DIGEST', 'STATUS', 'ERROR_MESSAGE',
+      'SAMPLING_STRATUM', 'INCLUSION_PROBABILITY', 'SAMPLING_REASON', 'AIR_REQUEST_TYPE',
     ];
 
     const binds: unknown[] = [];
@@ -71,13 +72,15 @@ class ResultsWriter {
         r.totalLatencyMs, variantJson(r.stepLatencyMs), r.inputTokens, r.outputTokens,
         r.cacheReadTokens, r.estimatedCostUsd, r.modelId, r.pricingDate, r.dtoDigest,
         r.status, r.errorMessage,
+        r.samplingStratum, r.inclusionProbability, r.samplingReason, r.airRequestType,
       ];
       binds.push(...cells);
       // placeholders, with PARSE_JSON / TO_DATE wrapping for the right columns
       return (
         'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ' +
         'PARSE_JSON(?), PARSE_JSON(?), ?, PARSE_JSON(?), ' +
-        '?, ?, ?, ?, ?, TO_DATE(?), ?, ?, ?'
+        '?, ?, ?, ?, ?, TO_DATE(?), ?, ?, ?, ' +
+        '?, ?, ?, ?'
       );
     });
 
