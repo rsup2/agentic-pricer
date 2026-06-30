@@ -99,6 +99,13 @@ const priceRoute = createRoute({
   },
 });
 app.openapi(priceRoute, (c) => {
+  // Optional shared-secret gate (defence-in-depth for the PHI in the body). When
+  // SHADOW_API_KEY is unset, no auth is enforced (relies on network isolation);
+  // when set, the caller (AIR) must send a matching Bearer token.
+  const expected = process.env.SHADOW_API_KEY;
+  if (expected && c.req.header('authorization') !== `Bearer ${expected}`) {
+    return c.json({ error: 'unauthorized' }, 401);
+  }
   // Body is already validated against PriceRequestSchema by the OpenAPI route.
   const { requestId, dto, sampling } = c.req.valid('json');
   // fire-and-forget: enqueue behind the concurrency gate, return immediately.
