@@ -28,10 +28,11 @@ const EnvSchema = z.object({
   RESULTS_FLUSH_MAX_ROWS: z.coerce.number().default(25),
 
   // Version provenance stamped on every result row (see pricerVersion below).
-  // PRICER_LABEL is the human-readable name for this build/cut; bump it when a
-  // change is meaningful for the eval (prompt/model/logic). The exact commit
-  // (PRICER_VERSION) and its GitHub link come from Aptible's injected env vars.
-  PRICER_LABEL: z.string().default('pnr-historicals'),
+  // PRICER_LABEL is an OPTIONAL human-readable name for a build/cut; set it per
+  // deploy when you want a friendly grouping key. Intentionally NO code default —
+  // when unset it falls back to the commit SHA (see pricerLabel below), so an
+  // unlabeled deploy is never misattributed to a previous build's label.
+  PRICER_LABEL: z.string().optional(),
   APTIBLE_GIT_COMMIT_SHA: z.string().optional(),
   APTIBLE_GIT_COMMIT_URL: z.string().optional(),
 });
@@ -66,5 +67,8 @@ function resolvePricerVersion(): string {
 }
 
 export const pricerVersion = resolvePricerVersion();
-export const pricerLabel = env.PRICER_LABEL;
+// Fall back to the commit SHA when no explicit label is set, so unlabeled builds
+// stay distinct in the eval (GROUP BY pricer_label) instead of pooling under a
+// stale hardcoded name.
+export const pricerLabel = env.PRICER_LABEL?.trim() || pricerVersion;
 export const pricerCommitUrl = env.APTIBLE_GIT_COMMIT_URL?.trim() || null;

@@ -7,7 +7,7 @@ import {
   stcLookupSql,
   srtContextSql,
   patientHistorySql,
-  canonicalOwnHistorySql,
+  CANONICAL_OWN_HISTORY_SQL,
   groupIntelligenceSql,
   buildNumericInList,
 } from "../tools/queries.js";
@@ -308,9 +308,7 @@ export async function gatherPatientHistory(dto: PricingRequestDto): Promise<{
   if (!memberId) {
     return { rows: [], note: "no ehrPatientId or member id on DTO — patient history skipped" };
   }
-  const rows = await executeQuery(
-    canonicalOwnHistorySql({ serviceDate, memberId }),
-  );
+  const rows = await executeQuery(CANONICAL_OWN_HISTORY_SQL, [serviceDate, memberId]);
   return { rows, note: rows.length ? `${rows.length} prior claim lines (canonical, member-keyed pnr)` : "no prior claims (new member)" };
 }
 
