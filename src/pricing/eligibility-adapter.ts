@@ -22,14 +22,16 @@
  * live Stedi call rather than pricing off a malformed tile.
  */
 
+import type { StediResult } from '../tools/stedi.js';
+
 type AnyRec = Record<string, unknown>;
 
-/** Result element mirroring src/tools/stedi.ts checkEligibility (ok case). */
-type OkResult = {
-  ok: true;
-  stc: string;
-  response: { benefitsInformation: AnyRec[]; subscriber?: AnyRec; planInformation?: AnyRec };
-};
+/**
+ * Result element — the ok variant of the authoritative Stedi result type, so a
+ * tile we hand to the synthesis path is always the exact shape a live Stedi call
+ * would produce (shape drift in stedi.ts becomes a compile error here).
+ */
+type OkResult = Extract<StediResult, { ok: true }>;
 export type AdaptedEligibility = { results: OkResult[]; groupNumber: string | null };
 
 // AIR normalized benefitType -> X12 271 benefit code (see src/tools/stedi.ts):
@@ -146,6 +148,27 @@ function accumulatorRecords(spend: AnyRec | undefined): AnyRec[] {
 }
 
 /**
+ * Drop byte-identical duplicate records within one STC bucket. AIR forwards one
+ * transformedBenefits per priced SRT, and plan-level data is repeated across all
+ * of them — most visibly the coverageSpend accumulators (which become STC-30
+ * tiles), but also any shared per-STC tile. Without this, an N-SRT request emits
+ * N copies of each identical tile, crowding the (char-capped) synthesis payload
+ * and skewing how the agent reads remaining benefits. Distinct tiles (e.g. in- vs
+ * out-of-network for the same STC) serialize differently and are kept.
+ */
+function dedupeRecords(records: AnyRec[]): AnyRec[] {
+  const seen = new Set<string>();
+  const out: AnyRec[] = [];
+  for (const r of records) {
+    const key = JSON.stringify(r);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
+/**
  * Adapt AIR eligibility -> our STEDI result shape. Returns null when nothing
  * usable is present so the caller falls back to a live Stedi call.
  */
@@ -194,9 +217,9 @@ export function adaptAirEligibility(eligibility: unknown): AdaptedEligibility | 
   if (byStc.size === 0) return null;
 
   const results: OkResult[] = [...byStc.entries()].map(([stc, benefitsInformation]) => ({
-    ok: true,
+    ok: true as const,
     stc,
-    response: { benefitsInformation, subscriber, planInformation },
+    response: { benefitsInformation: dedupeRecords(benefitsInformation), subscriber, planInformation },
   }));
 
   return { results, groupNumber };
