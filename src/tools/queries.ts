@@ -269,19 +269,41 @@ WHERE j.rn = 1
 `;
 }
 
-/** 1c — patient claim history (own prior closed claims, date-gated). */
-export function patientHistorySql(opts: {
-  serviceDate: string;
-  orgId: number;
-  ehrPatientId: string;
-}): string {
-  // ehrPatientId/orgId/serviceDate validated as primitives by the caller.
-  const safePatientId = String(opts.ehrPatientId).replace(/'/g, '');
-  return buildHistoryStyleQuery({
-    serviceDate: opts.serviceDate,
-    orgId: opts.orgId,
-    whereFilter: `AND c.patientid = '${safePatientId}'`,
-  });
+/**
+ * 1c — patient's OWN prior claims, from the cross-EHR canonical model
+ * (prod_core.canonical.claims; SOURCE_SYSTEM = athena | experity), keyed by the
+ * insurance MEMBER id. Works for BOTH Athena AND Experity/MedRite orgs — the old
+ * base_athena/ehrPatientId path (buildHistoryStyleQuery above) had no Experity data
+ * and coerced Experity's GUID context id to a number ("Numeric value '<guid>' is
+ * not recognized"). Being a precomputed DBT model it carries the already-adjudicated
+ * patient responsibility (pnr) and is a point lookup, not the heavy multi-join.
+ *
+ * ⛔ FOREKNOWLEDGE: date_of_service strictly < serviceDate (never the visit being
+ * priced or anything after it); 2-year lookback bounds volume. The settled pnr
+ * subsumes the base_athena transaction-posting-date guard. memberId is interpolated
+ * as a quote-stripped literal.
+ *
+ * NOTE: GROUP intelligence (groupIntelligenceSql below) deliberately still uses the
+ * base_athena buildHistoryStyleQuery / policygroupnumber path — canonical's
+ * insurance_group_number is sparse (0% Experity / 64% Athena) and the DTO group
+ * number frequently isn't present there, so keying group off canonical would
+ * REGRESS today's working Athena group signal. Cross-EHR group is a separate rework.
+ */
+export function patientHistorySql(opts: { serviceDate: string; memberId: string }): string {
+  const safeMember = String(opts.memberId).replace(/'/g, '');
+  return `
+SELECT source_system, procedure_code, modifier, date_of_service,
+       pnr, payment, list_price,
+       payer_plan_name, payer_type, plan_type,
+       insurance_member_id, insurance_group_number, state
+FROM prod_core.canonical.claims
+WHERE pnr IS NOT NULL
+  AND date_of_service < '${opts.serviceDate}'
+  AND date_of_service >= DATEADD('year', -2, '${opts.serviceDate}')
+  AND insurance_member_id = '${safeMember}'
+ORDER BY date_of_service DESC
+LIMIT 400
+`;
 }
 
 /** Step 3 — group/plan intelligence (all members on a group number, date-gated). */

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { estimateCostUsd } from '../pricing/cost.js';
+import { pricerVersion, pricerLabel, pricerCommitUrl } from '../env.js';
 import type { PricingRequestDto, SamplingMeta } from '../pricing/types.js';
 import type { PricingRunResult } from '../pricing/run.js';
 import { toYmd } from '../pricing/gather.js';
@@ -32,6 +33,17 @@ export type ResultRow = {
   inclusionProbability: number | null;
   samplingReason: string | null;
   airRequestType: string | null;
+  // code-version provenance (which build produced this price)
+  pricerVersion: string; // short git SHA (or 'dev' locally)
+  pricerLabel: string; // human-readable build name
+  pricerCommitUrl: string | null; // GitHub commit link (Aptible), null locally
+};
+
+/** Version columns are identical for every row a given build writes. */
+const versionCols = {
+  pricerVersion,
+  pricerLabel,
+  pricerCommitUrl,
 };
 
 /** Flatten optional sampling metadata to the four nullable row columns. */
@@ -91,6 +103,7 @@ export function toResultRows(
     status: 'COMPLETED' as const,
     errorMessage: null,
     ...samplingCols(sampling),
+    ...versionCols,
   }));
 }
 
@@ -130,5 +143,6 @@ export function toErrorRow(
     status: 'ERROR',
     errorMessage: (error.message ?? String(error)).slice(0, 2000),
     ...samplingCols(sampling),
+    ...versionCols,
   };
 }
