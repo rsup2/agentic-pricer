@@ -48,8 +48,7 @@ CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
     AIR_REQUEST_TYPE       STRING,                    -- PriceTreatmentsDto.requestType on the AIR side
 
     -- code-version provenance (which build produced this price) --
-    PRICER_VERSION         STRING,                    -- short git SHA (APTIBLE_GIT_COMMIT_SHA), 'dev' locally
-    PRICER_LABEL           STRING,                    -- human-readable build name (e.g. 'pnr-historicals')
+    PRICER_VERSION         STRING,                    -- short git SHA (APTIBLE_GIT_COMMIT_SHA), 'dev' locally; the build key
     PRICER_COMMIT_URL      STRING,                    -- GitHub commit link (APTIBLE_GIT_COMMIT_URL); PR is one click away
 
     CREATED_AT             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
@@ -64,5 +63,4 @@ CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
 
 -- Version provenance columns — run these to add them to the existing ALE_DEV table:
 --   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS PRICER_VERSION STRING;
---   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS PRICER_LABEL STRING;
 --   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS PRICER_COMMIT_URL STRING;

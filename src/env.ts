@@ -27,12 +27,9 @@ const EnvSchema = z.object({
   RESULTS_FLUSH_INTERVAL_MS: z.coerce.number().default(5000),
   RESULTS_FLUSH_MAX_ROWS: z.coerce.number().default(25),
 
-  // Version provenance stamped on every result row (see pricerVersion below).
-  // PRICER_LABEL is an OPTIONAL human-readable name for a build/cut; set it per
-  // deploy when you want a friendly grouping key. Intentionally NO code default —
-  // when unset it falls back to the commit SHA (see pricerLabel below), so an
-  // unlabeled deploy is never misattributed to a previous build's label.
-  PRICER_LABEL: z.string().optional(),
+  // Version provenance stamped on every result row (see pricerVersion below) —
+  // the commit SHA (PRICER_VERSION) and its GitHub link come from Aptible's
+  // injected env vars.
   APTIBLE_GIT_COMMIT_SHA: z.string().optional(),
   APTIBLE_GIT_COMMIT_URL: z.string().optional(),
 });
@@ -49,7 +46,6 @@ export const resultsTableFqn = `${env.RESULTS_DATABASE}.${env.RESULTS_SCHEMA}.${
  * time. On Aptible, APTIBLE_GIT_COMMIT_SHA/_URL are injected per deploy (ground
  * truth of what's running). Locally we fall back to the current git SHA, else 'dev'.
  *   - pricerVersion   : short commit SHA (the audit anchor; maps to a PR on GitHub)
- *   - pricerLabel     : human-readable build name (dashboard grouping)
  *   - pricerCommitUrl : direct link to the commit on GitHub (PR is one click away)
  */
 function resolvePricerVersion(): string {
@@ -67,8 +63,4 @@ function resolvePricerVersion(): string {
 }
 
 export const pricerVersion = resolvePricerVersion();
-// Fall back to the commit SHA when no explicit label is set, so unlabeled builds
-// stay distinct in the eval (GROUP BY pricer_label) instead of pooling under a
-// stale hardcoded name.
-export const pricerLabel = env.PRICER_LABEL?.trim() || pricerVersion;
 export const pricerCommitUrl = env.APTIBLE_GIT_COMMIT_URL?.trim() || null;

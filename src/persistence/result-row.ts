@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { estimateCostUsd } from '../pricing/cost.js';
-import { pricerVersion, pricerLabel, pricerCommitUrl } from '../env.js';
+import { pricerVersion, pricerCommitUrl } from '../env.js';
 import type { PricingRequestDto, SamplingMeta } from '../pricing/types.js';
 import type { PricingRunResult } from '../pricing/run.js';
 import { toYmd } from '../pricing/gather.js';
@@ -35,14 +35,12 @@ export type ResultRow = {
   airRequestType: string | null;
   // code-version provenance (which build produced this price)
   pricerVersion: string; // short git SHA (or 'dev' locally)
-  pricerLabel: string; // human-readable build name
   pricerCommitUrl: string | null; // GitHub commit link (Aptible), null locally
 };
 
 /** Version columns are identical for every row a given build writes. */
 const versionCols = {
   pricerVersion,
-  pricerLabel,
   pricerCommitUrl,
 };
 
