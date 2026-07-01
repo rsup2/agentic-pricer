@@ -208,7 +208,7 @@ function buildSynthesisPrompt(
     `# Patient's OWN prior claims (date-gated, cross-EHR canonical; pnr = adjudicated patient responsibility, ${history.note})`,
     JSON.stringify(history.rows, null, 2).slice(0, 40_000),
     ``,
-    `# Group/plan intelligence (date-gated, cross-EHR canonical; pnr = adjudicated patient responsibility, ${group.note})`,
+    `# Group/plan intelligence (date-gated, base claim tables; per-line allowable/payment + patient copay/coinsurance/deductible — NOT a pnr column, ${group.note})`,
     JSON.stringify(group.rows, null, 2).slice(0, 60_000),
     ``,
     `Price each SRT per your procedure. Use web search for public plan documents if helpful.`,
