@@ -42,6 +42,13 @@ export const PricingRequestDtoSchema = z
     // Optional accumulator at request time (coverageSpend). Highest-priority
     // accumulator source when present (see skill Step 5.A.7).
     coverageSpend: z.unknown().optional(),
+    // Optional pre-computed eligibility forwarded by AIR (its normalized
+    // `transformedBenefits`, one per priced SRT/entity). When present we PREFER it
+    // and skip our own Stedi 270/271 call — AIR already ran eligibility, so
+    // re-calling Stedi is redundant and error-prone. Shape is intentionally loose
+    // (parsed defensively in eligibility-adapter.ts); absent => fall back to our
+    // own live Stedi call (today's behavior).
+    eligibility: z.unknown().optional(),
   })
   .passthrough();
 

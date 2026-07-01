@@ -8,6 +8,7 @@ import {
   gatherGroupIntelligence,
 } from './gather.js';
 import { normalizeUsage } from './cost.js';
+import { adaptAirEligibility } from './eligibility-adapter.js';
 
 export type PricingRunResult = {
   output: SynthesisOutput;
@@ -39,23 +40,39 @@ export async function runPricing(
   const t0 = nowMs();
   const stepLatencyMs: StepLatency = {};
 
+  // If AIR forwarded its already-computed eligibility, PREFER it and skip our own
+  // Stedi entirely (both the STC probe during payer resolution and the per-STC
+  // eligibility call). Unusable/absent => fall back to a live Stedi call (today's
+  // behavior). AIR already ran eligibility, so re-calling Stedi is redundant work
+  // and a known error source.
+  const airEligibility = adaptAirEligibility(dto.eligibility);
+
   // Phase 1: payer/STC and patient history can run concurrently.
   // STEDI needs the payer id, so it follows payer/STC; patient history is independent.
   const [[payerStc, payerStcMs], [history, historyMs]] = await Promise.all([
-    timed(nowMs, () => gatherPayerAndStc(dto)),
+    timed(nowMs, () => gatherPayerAndStc(dto, { skipStediProbe: airEligibility != null })),
     timed(nowMs, () => gatherPatientHistory(dto)),
   ]);
   stepLatencyMs.payerStc = payerStcMs;
   stepLatencyMs.history = historyMs;
 
-  // Phase 2: STEDI (depends on payer id + STC chain).
-  const [stedi, stediMs] = await timed(nowMs, () =>
-    gatherStedi(dto, payerStc.payerStediId, payerStc.uniqueStcs, {
-      npi: payerStc.providerNpi,
-      firstName: payerStc.providerFirstName,
-      lastName: payerStc.providerLastName,
-    }),
-  );
+  // Phase 2: eligibility. Prefer AIR's forwarded tiles; else a live Stedi call.
+  let stedi: Awaited<ReturnType<typeof gatherStedi>>;
+  let stediMs = 0;
+  if (airEligibility) {
+    stedi = {
+      results: airEligibility.results,
+      groupNumber: airEligibility.groupNumber ?? dto.primaryInsurance.groupNumber ?? null,
+    };
+  } else {
+    [stedi, stediMs] = await timed(nowMs, () =>
+      gatherStedi(dto, payerStc.payerStediId, payerStc.uniqueStcs, {
+        npi: payerStc.providerNpi,
+        firstName: payerStc.providerFirstName,
+        lastName: payerStc.providerLastName,
+      }),
+    );
+  }
   stepLatencyMs.stedi = stediMs;
 
   // HARD GATE: a price requires a successful STEDI eligibility check. If EVERY
