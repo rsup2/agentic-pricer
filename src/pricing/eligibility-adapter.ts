@@ -57,16 +57,16 @@ function firstGroupNumber(results: OkResult[]): string | null {
 }
 
 /**
- * Adapt AIR-forwarded raw eligibility -> our STEDI result shape. Keeps one tile
- * per STC (mirroring our own client, which makes one call per unique STC) and
- * only accepts 271-shaped responses (have `benefitsInformation`); anything else
- * is dropped. Returns null when nothing usable is present so the caller falls
- * back to a live Stedi call.
+ * Adapt AIR-forwarded raw eligibility -> our STEDI result shape. Keeps every
+ * 271-shaped response AIR forwarded (it sends one per STC it looked up, including
+ * the plan-level STC-30 general coverage); non-271 payloads (pVerify/Availity) are
+ * dropped. We deliberately do NOT dedupe by STC — AIR may return the same STC for
+ * different places of service, and dropping either would lose real coverage.
+ * Returns null when nothing usable is present so the caller falls back to Stedi.
  */
 export function adaptAirEligibility(eligibility: unknown): AdaptedEligibility | null {
   const entries = asEntries(eligibility);
   const results: OkResult[] = [];
-  const seenStc = new Set<string>();
 
   for (const e of entries) {
     const response = e?.response;
@@ -75,8 +75,7 @@ export function adaptAirEligibility(eligibility: unknown): AdaptedEligibility | 
     // naturally excludes non-Stedi vendor payloads, which then fall back to Stedi.
     if (!Array.isArray((response as AnyRec).benefitsInformation)) continue;
     const stc = str(e.stc);
-    if (!stc || seenStc.has(stc)) continue;
-    seenStc.add(stc);
+    if (!stc) continue;
     results.push({ ok: true, stc, response: response as Record<string, unknown> });
   }
 

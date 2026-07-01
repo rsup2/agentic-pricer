@@ -36,6 +36,9 @@ export type ResultRow = {
   // code-version provenance (which build produced this price)
   pricerVersion: string; // short git SHA (or 'dev' locally)
   pricerCommitUrl: string | null; // GitHub commit link (Aptible), null locally
+  // eligibility provenance: 'air' = AIR forwarded eligibility (own Stedi skipped),
+  // 'self' = our own Stedi call, 'none' = run failed before eligibility resolved.
+  eligibilitySource: string;
 };
 
 /** Version columns are identical for every row a given build writes. */
@@ -100,6 +103,7 @@ export function toResultRows(
     dtoDigest: digest,
     status: 'COMPLETED' as const,
     errorMessage: null,
+    eligibilitySource: result.eligibilitySource,
     ...samplingCols(sampling),
     ...versionCols,
   }));
@@ -140,6 +144,7 @@ export function toErrorRow(
     dtoDigest: digestDto(dto),
     status: 'ERROR',
     errorMessage: (error.message ?? String(error)).slice(0, 2000),
+    eligibilitySource: 'none',
     ...samplingCols(sampling),
     ...versionCols,
   };

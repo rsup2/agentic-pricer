@@ -16,6 +16,10 @@ export type PricingRunResult = {
   totalLatencyMs: number;
   usage: TokenUsage;
   modelId: string;
+  // Where eligibility came from: 'air' = AIR forwarded it (we skipped Stedi),
+  // 'self' = we made our own Stedi call. Persisted so the shadow-vs-AIR analysis
+  // can separate the preferred path from the fallback.
+  eligibilitySource: 'air' | 'self';
 };
 
 /** time an async fn, returning [result, elapsedMs]. nowMs injected for testability. */
@@ -46,6 +50,7 @@ export async function runPricing(
   // behavior). AIR already ran eligibility, so re-calling Stedi is redundant work
   // and a known error source.
   const airEligibility = adaptAirEligibility(dto.eligibility);
+  const eligibilitySource: 'air' | 'self' = airEligibility ? 'air' : 'self';
 
   // Phase 1: payer/STC and patient history can run concurrently.
   // STEDI needs the payer id, so it follows payer/STC; patient history is independent.
@@ -88,7 +93,7 @@ export async function runPricing(
       (payerStc.payerStediId
         ? 'STEDI eligibility returned no usable tiles'
         : 'no working payer id could be resolved for STEDI');
-    return buildStediFailureResult(dto, payerStc, stedi, firstError, {
+    return buildStediFailureResult(dto, payerStc, stedi, firstError, eligibilitySource, {
       stepLatencyMs,
       totalLatencyMs: Math.round(nowMs() - t0),
     });
@@ -122,6 +127,7 @@ export async function runPricing(
     totalLatencyMs: Math.round(nowMs() - t0),
     usage,
     modelId: env.SYNTHESIS_MODEL,
+    eligibilitySource,
   };
 }
 
@@ -137,6 +143,7 @@ function buildStediFailureResult(
   payerStc: Awaited<ReturnType<typeof gatherPayerAndStc>>,
   stedi: Awaited<ReturnType<typeof gatherStedi>>,
   stediError: string,
+  eligibilitySource: 'air' | 'self',
   timing: { stepLatencyMs: StepLatency; totalLatencyMs: number },
 ): PricingRunResult {
   void stedi; // reserved for richer per-tile reporting; gate decision already made upstream.
@@ -173,6 +180,7 @@ function buildStediFailureResult(
     totalLatencyMs: timing.totalLatencyMs,
     usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0 },
     modelId: env.SYNTHESIS_MODEL,
+    eligibilitySource,
   };
 }
 
