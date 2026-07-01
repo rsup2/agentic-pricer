@@ -7,6 +7,7 @@ import {
   stcLookupSql,
   srtContextSql,
   patientHistorySql,
+  canonicalOwnHistorySql,
   groupIntelligenceSql,
   buildNumericInList,
 } from "../tools/queries.js";
@@ -283,22 +284,34 @@ async function pickWorkingPayerId(
 }
 
 /**
- * 1c: own patient claim history (date-gated), from the cross-EHR canonical model.
- * Keyed by insurance member id so it works for Athena AND Experity/MedRite (the old
- * ehrPatientId/base_athena path had no Experity data and crashed on its GUID ids).
+ * 1c: own patient claim history (date-gated). Routed by EHR:
+ *  - ATHENA (request carries an ehrPatientId): UNCHANGED patient-keyed base_athena
+ *    query — patient-specific, mirrors how AIR keys own-history.
+ *  - EXPERITY/MedRite (no ehrPatientId): cross-EHR canonical model keyed by insurance
+ *    member id. This is the fix — the base_athena path has no Experity data and used
+ *    to crash on Experity's GUID context id. Member-keyed is coarser (subscriber may
+ *    cover dependents), so it's only the fallback where no patient id is available.
  */
 export async function gatherPatientHistory(dto: PricingRequestDto): Promise<{
   rows: Record<string, unknown>[];
   note: string;
 }> {
+  const serviceDate = toYmd(dto.serviceDate);
+  if (dto.ehrPatientId) {
+    const rows = await executeQuery(
+      patientHistorySql({ serviceDate, orgId: dto.orgId, ehrPatientId: dto.ehrPatientId }),
+    );
+    return { rows, note: rows.length ? `${rows.length} prior closed-claim rows (Athena, patient-keyed)` : "no prior claims (new patient)" };
+  }
+  // No patient id -> Experity/MedRite: fall back to canonical, member-keyed.
   const memberId = dto.primaryInsurance?.memberId;
   if (!memberId) {
-    return { rows: [], note: "no member id on DTO — patient history skipped" };
+    return { rows: [], note: "no ehrPatientId or member id on DTO — patient history skipped" };
   }
   const rows = await executeQuery(
-    patientHistorySql({ serviceDate: toYmd(dto.serviceDate), memberId }),
+    canonicalOwnHistorySql({ serviceDate, memberId }),
   );
-  return { rows, note: rows.length ? `${rows.length} prior claim lines (member)` : "no prior claims (new member)" };
+  return { rows, note: rows.length ? `${rows.length} prior claim lines (canonical, member-keyed pnr)` : "no prior claims (new member)" };
 }
 
 /** Step 2: STEDI eligibility for all unique STCs + STC 30. */

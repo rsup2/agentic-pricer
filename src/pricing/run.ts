@@ -205,7 +205,7 @@ function buildSynthesisPrompt(
     `# STEDI eligibility (one tile-set per STC; STC 30 = plan-level accumulator)`,
     JSON.stringify(stediTiles, null, 2).slice(0, 60_000),
     ``,
-    `# Patient's OWN prior claims (date-gated, cross-EHR canonical; pnr = adjudicated patient responsibility, ${history.note})`,
+    `# Patient's OWN prior claims (date-gated; ${history.note} — see the CLAIM HISTORY shape note in your instructions)`,
     JSON.stringify(history.rows, null, 2).slice(0, 40_000),
     ``,
     `# Group/plan intelligence (date-gated, base claim tables; per-line allowable/payment + patient copay/coinsurance/deductible — NOT a pnr column, ${group.note})`,

@@ -270,26 +270,40 @@ WHERE j.rn = 1
 }
 
 /**
- * 1c — patient's OWN prior claims, from the cross-EHR canonical model
- * (prod_core.canonical.claims; SOURCE_SYSTEM = athena | experity), keyed by the
- * insurance MEMBER id. Works for BOTH Athena AND Experity/MedRite orgs — the old
- * base_athena/ehrPatientId path (buildHistoryStyleQuery above) had no Experity data
- * and coerced Experity's GUID context id to a number ("Numeric value '<guid>' is
- * not recognized"). Being a precomputed DBT model it carries the already-adjudicated
- * patient responsibility (pnr) and is a point lookup, not the heavy multi-join.
- *
- * ⛔ FOREKNOWLEDGE: date_of_service strictly < serviceDate (never the visit being
- * priced or anything after it); 2-year lookback bounds volume. The settled pnr
- * subsumes the base_athena transaction-posting-date guard. memberId is interpolated
- * as a quote-stripped literal.
- *
- * NOTE: GROUP intelligence (groupIntelligenceSql below) deliberately still uses the
- * base_athena buildHistoryStyleQuery / policygroupnumber path — canonical's
- * insurance_group_number is sparse (0% Experity / 64% Athena) and the DTO group
- * number frequently isn't present there, so keying group off canonical would
- * REGRESS today's working Athena group signal. Cross-EHR group is a separate rework.
+ * 1c — patient's OWN prior claims (own prior closed claims, date-gated), keyed by
+ * the EHR patient id via the base_athena claim/transaction tables. This is the
+ * ATHENA path and is UNCHANGED — it mirrors how AIR keys own-history (patient-first;
+ * member id is only used to pick primary vs secondary insurance), so it stays
+ * patient-specific. Used whenever the request carries an ehrPatientId (Athena).
  */
-export function patientHistorySql(opts: { serviceDate: string; memberId: string }): string {
+export function patientHistorySql(opts: {
+  serviceDate: string;
+  orgId: number;
+  ehrPatientId: string;
+}): string {
+  const safePatientId = String(opts.ehrPatientId).replace(/'/g, '');
+  return buildHistoryStyleQuery({
+    serviceDate: opts.serviceDate,
+    orgId: opts.orgId,
+    whereFilter: `AND c.patientid = '${safePatientId}'`,
+  });
+}
+
+/**
+ * 1c (Experity/MedRite fallback) — own prior claims from the cross-EHR canonical
+ * model (prod_core.canonical.claims), keyed by insurance MEMBER id. Used ONLY when
+ * the request has no ehrPatientId (Experity DTOs don't carry one) — the base_athena
+ * path above has no Experity data and coerced Experity's GUID context id to a number
+ * ("Numeric value '<guid>' is not recognized"). Carries the already-adjudicated
+ * patient responsibility (pnr); point lookup, not the heavy multi-join.
+ *
+ * Member-keyed is coarser than patient-keyed (a subscriber id can cover dependents),
+ * so it is deliberately the FALLBACK, not the default — Athena keeps patient-keying.
+ *
+ * ⛔ FOREKNOWLEDGE: date_of_service strictly < serviceDate; 2-year lookback bounds
+ * volume. The settled pnr subsumes the base_athena transaction-posting-date guard.
+ */
+export function canonicalOwnHistorySql(opts: { serviceDate: string; memberId: string }): string {
   const safeMember = String(opts.memberId).replace(/'/g, '');
   return `
 SELECT source_system, procedure_code, modifier, date_of_service,

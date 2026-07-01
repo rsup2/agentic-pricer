@@ -25,19 +25,21 @@ function deid(rows: Record<string, unknown>[]) {
 }
 
 async function main() {
-  const [ent] = await executeQuery<{ MEMBER_ID: string; GROUP_NUMBER: string | null; ORG_ID: number }>(
+  const [ent] = await executeQuery<{ MEMBER_ID: string; GROUP_NUMBER: string | null; ORG_ID: number; EHR_PATIENT_ID: string | null }>(
     `SELECT requestinfo:primaryInsurance:memberId::string AS member_id,
             requestinfo:primaryInsurance:groupNumber::string AS group_number,
-            requestinfo:orgId::int AS org_id
+            requestinfo:orgId::int AS org_id,
+            requestinfo:ehrPatientId::string AS ehr_patient_id
      FROM prod_raw.raw_air_mongo.pricing_entities WHERE id = ?`,
     [ENTITY_ID],
   );
   if (!ent) throw new Error(`no pricing entity ${ENTITY_ID}`);
-  console.log(`entity ${ENTITY_ID}  org=${ent.ORG_ID}  memberId.len=${ent.MEMBER_ID?.length}  group=${ent.GROUP_NUMBER ? 'present' : 'none'}`);
+  console.log(`entity ${ENTITY_ID}  org=${ent.ORG_ID}  ehrPatientId=${ent.EHR_PATIENT_ID ? 'present -> Athena/base_athena path' : 'none -> Experity/canonical path'}  group=${ent.GROUP_NUMBER ? 'present' : 'none'}`);
 
   const dto: any = {
     orgId: ent.ORG_ID,
     serviceDate: SERVICE_DATE,
+    ehrPatientId: ent.EHR_PATIENT_ID ?? undefined,
     primaryInsurance: { memberId: ent.MEMBER_ID, payer: 'x', groupNumber: ent.GROUP_NUMBER ?? undefined },
   };
 
