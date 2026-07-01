@@ -62,6 +62,7 @@ WITH shadow AS (
         ANY_VALUE(SAMPLING_REASON)                    AS sampling_reason,
         ANY_VALUE(SAMPLING_STRATUM)                   AS stratum,
         COALESCE(ANY_VALUE(INCLUSION_PROBABILITY), 1) AS p,   -- weight = 1/p
+        ANY_VALUE(PRICER_VERSION)                     AS pricer_version, -- which build produced this (commit SHA)
         BOOLOR_AGG(CONFIDENCE = 'UNABLE_TO_PRICE')    AS any_unpriced
     FROM ALE.ALE_DEV.AGENTIC_PRICER_RESULTS
     WHERE STATUS = 'COMPLETED'
@@ -104,6 +105,7 @@ joined AS (
         s.HRT_ID,
         s.stratum,
         s.sampling_reason,
+        s.pricer_version,
         s.p,
         s.shadow_conf_rank,
         s.shadow_price,
@@ -126,9 +128,12 @@ joined AS (
       AND NOT s.any_unpriced                                    -- only treatments the agent actually priced
 )
 
--- Population-level, inclusion-probability-weighted scorecard. Slice by confidence
--- and stratum to test "better than AIR on data-rich plans, worse on rare ones".
+-- Population-level, inclusion-probability-weighted scorecard, sliced by BUILD
+-- (pricer_version = commit SHA) x confidence — so you compare version-over-version
+-- and never pool prices from two code cuts. Filter `WHERE pricer_version = '<sha>'`
+-- to score one build in isolation; map the SHA to its PR via PRICER_COMMIT_URL.
 SELECT
+    pricer_version,
     CASE shadow_conf_rank WHEN 3 THEN 'HIGH' WHEN 2 THEN 'MEDIUM'
                           WHEN 1 THEN 'LOW' ELSE 'NONE' END     AS shadow_confidence,
     COUNT(*)                                                    AS n_sampled,
@@ -143,8 +148,31 @@ SELECT
     ROUND(SUM(IFF(shadow_err < 0, 1.0, 0) / p) / SUM(1.0 / p), 3) AS shadow_underprice_rate,
     ROUND(SUM(IFF(air_err    < 0, 1.0, 0) / p) / SUM(1.0 / p), 3) AS air_underprice_rate
 FROM joined
-GROUP BY shadow_conf_rank
-ORDER BY shadow_conf_rank DESC;
+GROUP BY pricer_version, shadow_conf_rank
+ORDER BY pricer_version, shadow_conf_rank DESC;
+
+-- ── $0 vs non-$0 SEGMENTATION (don't let full-coverage $0 matches flatter the score) ──
+-- Objective-function caveat (Alex): a $0 prediction that matches a $0 claim scores as
+-- "accurate" but creates ~no value — Medicaid/D-SNP/preventive orgs are full of these.
+-- Segment by whether the ACTUAL responsibility was $0, expose how hard shadow leans on
+-- $0, and add a head-to-head "moved toward truth vs AIR" win rate. The actual_>$0 segment
+-- is where real value is proven; a great shadow_wmae there (not on the $0 rows) is the win.
+SELECT
+    pricer_version,
+    CASE WHEN actual_pr = 0 THEN 'actual_$0 (low-info)'
+         ELSE 'actual_>$0 (informative)' END                       AS segment,
+    COUNT(*)                                                        AS n_sampled,
+    ROUND(SUM(1.0 / p))                                            AS est_population_n,
+    ROUND(SUM(ABS(shadow_err) / p) / SUM(1.0 / p), 2)              AS shadow_wmae,
+    ROUND(SUM(ABS(air_err)    / p) / SUM(1.0 / p), 2)              AS air_wmae,
+    -- how much shadow leans on predicting $0 within the segment
+    ROUND(SUM(IFF(shadow_price = 0, 1.0, 0) / p) / SUM(1.0 / p), 3) AS shadow_pred_zero_rate,
+    -- head-to-head value: shadow strictly closer to truth than AIR (weighted)
+    ROUND(SUM(IFF(ABS(shadow_err) < ABS(air_err), 1.0, 0) / p) / SUM(1.0 / p), 3) AS shadow_beats_air_rate,
+    ROUND(SUM(IFF(ABS(air_err) < ABS(shadow_err), 1.0, 0) / p) / SUM(1.0 / p), 3) AS air_beats_shadow_rate
+FROM joined
+GROUP BY pricer_version, segment
+ORDER BY pricer_version, segment;
 
 -- ── Per-SRT / per-CPT variant (finer grain, for multi-treatment visits) ─────────
 -- Replace the claim-level actual with ART's CPT-line responsibility and join on the

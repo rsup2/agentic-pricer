@@ -269,13 +269,18 @@ WHERE j.rn = 1
 `;
 }
 
-/** 1c — patient claim history (own prior closed claims, date-gated). */
+/**
+ * 1c — patient's OWN prior claims (own prior closed claims, date-gated), keyed by
+ * the EHR patient id via the base_athena claim/transaction tables. This is the
+ * ATHENA path and is UNCHANGED — it mirrors how AIR keys own-history (patient-first;
+ * member id is only used to pick primary vs secondary insurance), so it stays
+ * patient-specific. Used whenever the request carries an ehrPatientId (Athena).
+ */
 export function patientHistorySql(opts: {
   serviceDate: string;
   orgId: number;
   ehrPatientId: string;
 }): string {
-  // ehrPatientId/orgId/serviceDate validated as primitives by the caller.
   const safePatientId = String(opts.ehrPatientId).replace(/'/g, '');
   return buildHistoryStyleQuery({
     serviceDate: opts.serviceDate,
@@ -283,6 +288,38 @@ export function patientHistorySql(opts: {
     whereFilter: `AND c.patientid = '${safePatientId}'`,
   });
 }
+
+/**
+ * 1c (Experity/MedRite fallback) — own prior claims from the cross-EHR canonical
+ * model (prod_core.canonical.claims), keyed by insurance MEMBER id. Used ONLY when
+ * the request has no ehrPatientId (Experity DTOs don't carry one) — the base_athena
+ * path above has no Experity data and coerced Experity's GUID context id to a number
+ * ("Numeric value '<guid>' is not recognized"). Carries the already-adjudicated
+ * patient responsibility (pnr); point lookup, not the heavy multi-join.
+ *
+ * Member-keyed is coarser than patient-keyed (a subscriber id can cover dependents),
+ * so it is deliberately the FALLBACK, not the default — Athena keeps patient-keying.
+ *
+ * Bind params (positional, like PAYER_LOOKUP_SQL): :1 = serviceDate (YYYY-MM-DD),
+ * :2 = memberId. Parameterized rather than interpolated — this reads PHI claims and
+ * memberId is user-supplied. Caller: executeQuery(CANONICAL_OWN_HISTORY_SQL, [serviceDate, memberId]).
+ *
+ * ⛔ FOREKNOWLEDGE: date_of_service strictly < serviceDate; 2-year lookback bounds
+ * volume. The settled pnr subsumes the base_athena transaction-posting-date guard.
+ */
+export const CANONICAL_OWN_HISTORY_SQL = `
+SELECT source_system, procedure_code, modifier, date_of_service,
+       pnr, payment, list_price,
+       payer_plan_name, payer_type, plan_type,
+       insurance_member_id, insurance_group_number, state
+FROM prod_core.canonical.claims
+WHERE pnr IS NOT NULL
+  AND date_of_service < TO_DATE(:1)
+  AND date_of_service >= DATEADD('year', -2, TO_DATE(:1))
+  AND insurance_member_id = :2
+ORDER BY date_of_service DESC
+LIMIT 400
+`;
 
 /** Step 3 — group/plan intelligence (all members on a group number, date-gated). */
 export function groupIntelligenceSql(opts: {

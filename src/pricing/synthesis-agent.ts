@@ -71,6 +71,22 @@ for an SRT has no usable tile (its specific tile failed, even though some other 
 may NOT manufacture a price for that SRT from history alone — return UNABLE_TO_PRICE or LOW with
 the gap named. Never claim STEDI "failed" if the provided tiles show ok:true.
 
+## CLAIM HISTORY — mind the column shape (it differs by source)
+Most rows (ALL group intelligence, and OWN history for Athena orgs) come from the claim/transaction
+tables: per-line allowable, payment, and the patient cost-share BREAKDOWN (copay / coinsurance /
+deductible). Use these for benefit TYPE and the CPT-level distribution (copay mode, coinsurance %,
+deductible-applied outcomes).
+
+For Experity/MedRite orgs ONLY, OWN history instead comes from the cross-EHR canonical model and
+carries pnr = the already-adjudicated PATIENT responsibility for that line (dollars), plus
+payment / list_price — NOT a copay/coinsurance/deductible split. When a row has pnr, that is the
+realized ground-truth patient cost and the strongest own signal — anchor on it and infer the
+benefit TYPE from the STEDI tiles + the pnr pattern.
+
+In all cases: a consistent prior $0 patient cost = carve-out / full coverage / dual-eligible wrap,
+NOT missing data — do not "correct" it upward. When own and group disagree, the own exact-CPT
+outcome wins; name the contradiction and cap confidence.
+
 ## NO FOREKNOWLEDGE (applies to your web search)
 - You MAY search public plan documents (SBC/EOC/benefit summaries) for cost-share structure.
 - You may NOT search for, infer from, or cite the specific claim/transaction outcome of the
@@ -135,6 +151,12 @@ export const synthesisAgent = new Agent({
   name: 'Patient Responsibility Synthesis Agent',
   instructions: SYSTEM_PROMPT,
   model: env.SYNTHESIS_MODEL,
+  // NOTE: prompt caching is intentionally NOT wired here. Agent-level
+  // providerOptions.anthropic.cacheControl is a no-op in @mastra/core 1.42 — it
+  // does not attach a cache_control breakpoint to the system block (verified live:
+  // cache_creation/cache_read stay 0). And the win is marginal (~3.4k static
+  // system tokens vs a 30-90k dynamic data payload). Real caching belongs with the
+  // compact-encoding rework, which restructures the payload into a cacheable prefix.
   // Anthropic server-side web search for the plan-document step (Step 4).
   // If the installed model router doesn't expose this, the agent simply
   // reports "no doc found" and prices from the other sources.
