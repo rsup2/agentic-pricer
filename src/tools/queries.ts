@@ -125,7 +125,11 @@ WITH master AS (
   LEFT JOIN insurancepackage ip2 ON ip2.insurancepackageid = pi2.insurancepackageid AND ip2.contextid = pi2.contextid
   LEFT JOIN transaction t ON c.claimid = t.claimid AND c.contextid = t.contextid
   LEFT JOIN chargedetail cd ON t.parentchargeid = cd.chargeid AND t.contextid = cd.contextid
-  LEFT JOIN prod_core.base_hex_pricing.organization o ON o.ehr_context_id = c.contextid
+  -- Compare as strings: Experity orgs have GUID ehr_context_ids; an Athena claim's
+  -- numeric contextid would otherwise force a numeric cast of the GUID and throw
+  -- "Numeric value '<guid>' is not recognized". Casting avoids the crash — Athena
+  -- still matches (numeric-as-string), Experity simply finds no Athena claims (empty).
+  LEFT JOIN prod_core.base_hex_pricing.organization o ON o.ehr_context_id = TO_VARCHAR(c.contextid)
   WHERE c.claimservicedate >= DATEADD('year', -2, '${serviceDate}')
     AND c.claimservicedate < '${serviceDate}'
     AND t.transactioncreateddatetime < '${serviceDate}'   -- only transactions that had RETURNED/posted before pricing date
