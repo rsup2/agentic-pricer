@@ -321,6 +321,74 @@ ORDER BY date_of_service DESC
 LIMIT 400
 `;
 
+/**
+ * Step 3 (Experity/MedRite) — GROUP historicals via member-id SATURATION. Experity
+ * claims carry NO group number (~0% across every source), so the base_athena group
+ * query returns nothing. Instead we saturate: join each Experity claim on insurance
+ * member id to a coverage entity we've already produced (RAW_AIR_MONGO.COVERAGE_ENTITIES),
+ * stamping the group number onto the claim, then return everyone sharing the PRICING
+ * member's group. The pricing member's own group is resolved from the same crosswalk
+ * (target_group) — Experity STEDI doesn't return it. Carries pnr (adjudicated patient
+ * responsibility), same shape as CANONICAL_OWN_HISTORY_SQL.
+ *
+ * Coverage today ~14% of MedRite claim lines (grows as we price more members); big
+ * cohorts are real multi-member employer/plan groups. Live-query latency ~4.5s —
+ * acceptable for the async shadow; the prod path should be a DBT-precomputed
+ * (group x CPT) frequency table (see sql/experity_group_historicals.sql).
+ *
+ * Bind params: :1 = serviceDate (YYYY-MM-DD, used twice), :2 = pricing memberId.
+ * Caller: executeQuery(CANONICAL_GROUP_HISTORY_SQL, [serviceDate, memberId]).
+ * ⛔ FOREKNOWLEDGE: date_of_service strictly < serviceDate; 2-year lookback.
+ */
+export const CANONICAL_GROUP_HISTORY_SQL = `
+WITH member_group AS (
+  -- One group per member: the group from the member's MOST RECENT coverage entity
+  -- (by the record's source-modified time), NOT a lexicographic MAX — so a plan
+  -- change or a secondary-insurance group can't silently win.
+  SELECT member_id, group_number FROM (
+    SELECT TRIM(memberid) AS member_id,
+           COALESCE(
+             coverage:plans[0]:groupNumber::string,
+             coverage:planInformation:groupNumber::string,
+             coverage:PlanCoverageSummary:GroupNumber::string
+           ) AS group_number,
+           ROW_NUMBER() OVER (
+             PARTITION BY TRIM(memberid)
+             ORDER BY __HEVO__SOURCE_MODIFIED_AT DESC NULLS LAST
+           ) AS rn
+    FROM prod_raw.raw_air_mongo.coverage_entities
+    WHERE COALESCE(
+             coverage:plans[0]:groupNumber::string,
+             coverage:planInformation:groupNumber::string,
+             coverage:PlanCoverageSummary:GroupNumber::string
+          ) IS NOT NULL
+  )
+  WHERE rn = 1
+),
+target_group AS (
+  SELECT group_number FROM member_group WHERE member_id = TRIM(:2)
+),
+saturated AS (
+  SELECT c.source_system, c.procedure_code, c.modifier, c.date_of_service,
+         c.pnr, c.payment, c.list_price, c.payer_plan_name, c.payer_type,
+         c.plan_type, c.state, mg.group_number
+  FROM prod_core.canonical.claims c
+  JOIN member_group mg ON TRIM(c.insurance_member_id) = mg.member_id
+  WHERE c.source_system = 'EXPERITY'
+    AND c.pnr IS NOT NULL
+    AND TRIM(c.insurance_member_id) <> TRIM(:2)   -- exclude the pricing member (own-history covers them; keeps the group signal independent)
+    AND c.date_of_service <  TO_DATE(:1)
+    AND c.date_of_service >= DATEADD('year', -2, TO_DATE(:1))
+)
+SELECT s.source_system, s.procedure_code, s.modifier, s.date_of_service,
+       s.pnr, s.payment, s.list_price, s.payer_plan_name, s.payer_type,
+       s.plan_type, s.state, s.group_number
+FROM saturated s
+JOIN target_group t ON s.group_number = t.group_number
+ORDER BY s.date_of_service DESC
+LIMIT 400
+`;
+
 /** Step 3 — group/plan intelligence (all members on a group number, date-gated). */
 export function groupIntelligenceSql(opts: {
   serviceDate: string;
