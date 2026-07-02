@@ -8,6 +8,7 @@ import {
   srtContextSql,
   patientHistorySql,
   CANONICAL_OWN_HISTORY_SQL,
+  CANONICAL_GROUP_HISTORY_SQL,
   groupIntelligenceSql,
   buildNumericInList,
 } from "../tools/queries.js";
@@ -356,24 +357,50 @@ export async function gatherStedi(
   return { results, groupNumber };
 }
 
-/** Step 3: group/plan intelligence (date-gated), capped in-memory to keep tokens sane. */
+/**
+ * Step 3: group/plan intelligence (date-gated), capped in-memory to keep tokens sane.
+ * Routed by EHR, mirroring own-history:
+ *  - ATHENA (ehrPatientId present): base_athena, keyed by the group number resolved
+ *    upstream from STEDI/DTO. UNCHANGED.
+ *  - EXPERITY/MedRite (no ehrPatientId): the canonical member-id SATURATION query —
+ *    Experity claims carry no group number and Experity STEDI doesn't return one, so
+ *    we recover the group by joining on member id to coverage entities and self-resolve
+ *    the pricing member's own group. Rows carry pnr (canonical shape).
+ */
 export async function gatherGroupIntelligence(
   dto: PricingRequestDto,
   groupNumber: string | null,
 ): Promise<{ rows: Record<string, unknown>[]; note: string }> {
-  if (!groupNumber) {
-    return { rows: [], note: "no group number available — group intelligence skipped" };
+  const serviceDate = toYmd(dto.serviceDate);
+
+  // Athena: base-table group query, keyed by an upstream group number.
+  if (dto.ehrPatientId) {
+    if (!groupNumber) {
+      return { rows: [], note: "no group number available — group intelligence skipped (Athena)" };
+    }
+    const rows = await executeQuery(groupIntelligenceSql({ serviceDate, orgId: dto.orgId, groupNumber }));
+    const capped = rows.slice(0, 200);
+    return {
+      rows: capped,
+      note:
+        rows.length > capped.length
+          ? `group ${groupNumber}: ${rows.length} rows, capped to ${capped.length} most-recent`
+          : `group ${groupNumber}: ${rows.length} rows`,
+    };
   }
-  const rows = await executeQuery(
-    groupIntelligenceSql({ serviceDate: toYmd(dto.serviceDate), orgId: dto.orgId, groupNumber }),
-  );
-  // Cap to ~200 rows, most recent first, to bound synthesis token cost.
+
+  // Experity/MedRite: saturate Experity claims with a group via the coverage-entities
+  // crosswalk and self-resolve the pricing member's group (canonical pnr shape).
+  const memberId = dto.primaryInsurance?.memberId;
+  if (!memberId) {
+    return { rows: [], note: "no member id — group intelligence skipped (Experity)" };
+  }
+  const rows = await executeQuery(CANONICAL_GROUP_HISTORY_SQL, [serviceDate, memberId]);
   const capped = rows.slice(0, 200);
   return {
     rows: capped,
-    note:
-      rows.length > capped.length
-        ? `group ${groupNumber}: ${rows.length} rows, capped to ${capped.length} most-recent`
-        : `group ${groupNumber}: ${rows.length} rows`,
+    note: rows.length
+      ? `MedRite group (canonical member-saturated, pnr): ${rows.length} lines${rows.length > capped.length ? `, capped to ${capped.length}` : ""}`
+      : "no group cohort — member's group not resolvable via coverage entities (or empty)",
   };
 }

@@ -9,6 +9,7 @@ import {
 } from './gather.js';
 import { normalizeUsage } from './cost.js';
 import { adaptAirEligibility } from './eligibility-adapter.js';
+import { summarizeHistory } from './history-encoding.js';
 
 export type PricingRunResult = {
   output: SynthesisOutput;
@@ -230,11 +231,11 @@ function buildSynthesisPrompt(
     `# STEDI eligibility (one tile-set per STC; STC 30 = plan-level accumulator)`,
     JSON.stringify(stediTiles, null, 2).slice(0, 60_000),
     ``,
-    `# Patient's OWN prior claims (date-gated; ${history.note} — see the CLAIM HISTORY shape note in your instructions)`,
-    JSON.stringify(history.rows, null, 2).slice(0, 40_000),
+    `# Patient's OWN prior claims — per-CPT FREQUENCY TABLE (date-gated; ${history.note} — see the CLAIM HISTORY note for how to read this)`,
+    JSON.stringify(summarizeHistory(history.rows), null, 2).slice(0, 40_000),
     ``,
-    `# Group/plan intelligence (date-gated, base claim tables; per-line allowable/payment + patient copay/coinsurance/deductible — NOT a pnr column, ${group.note})`,
-    JSON.stringify(group.rows, null, 2).slice(0, 60_000),
+    `# Group/plan intelligence — per-CPT FREQUENCY TABLE (date-gated; shape auto-detected: Athena base-table vs Experity/MedRite canonical pnr — see the CLAIM HISTORY note; ${group.note})`,
+    JSON.stringify(summarizeHistory(group.rows), null, 2).slice(0, 60_000),
     ``,
     `Price each SRT per your procedure. Use web search for public plan documents if helpful.`,
     `Return ONLY the JSON object.`,
