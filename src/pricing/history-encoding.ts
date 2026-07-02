@@ -140,7 +140,8 @@ function ymd(v: unknown): string | null {
 export function detectShape(rows: Row[]): HistoryShape {
   if (rows.length === 0) return 'base';
   const r = rows[0];
-  if (pick(r, 'pnr') !== undefined || pick(r, 'procedure_code') !== undefined) return 'canonical';
+  // Require BOTH canonical markers (not either) so a stray column can't misclassify a base row.
+  if (pick(r, 'pnr') !== undefined && pick(r, 'procedure_code') !== undefined) return 'canonical';
   return 'base';
 }
 
@@ -230,6 +231,8 @@ export function summarizeHistory(rows: Row[], shape?: HistoryShape): HistorySumm
       }
       return base;
     })
+    // Drop codes with no numeric patient-cost data (n=0) — don't emit a synthetic $0.
+    .filter((e) => e.n > 0)
     .sort((a, b) => b.n - a.n);
 
   const shown = entries.slice(0, MAX_CODES);

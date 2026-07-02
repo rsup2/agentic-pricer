@@ -342,19 +342,28 @@ LIMIT 400
  */
 export const CANONICAL_GROUP_HISTORY_SQL = `
 WITH member_group AS (
-  SELECT TRIM(memberid) AS member_id,
-         MAX(COALESCE(
-           coverage:plans[0]:groupNumber::string,
-           coverage:planInformation:groupNumber::string,
-           coverage:PlanCoverageSummary:GroupNumber::string
-         )) AS group_number
-  FROM prod_raw.raw_air_mongo.coverage_entities
-  WHERE COALESCE(
-           coverage:plans[0]:groupNumber::string,
-           coverage:planInformation:groupNumber::string,
-           coverage:PlanCoverageSummary:GroupNumber::string
-        ) IS NOT NULL
-  GROUP BY 1
+  -- One group per member: the group from the member's MOST RECENT coverage entity
+  -- (by the record's source-modified time), NOT a lexicographic MAX — so a plan
+  -- change or a secondary-insurance group can't silently win.
+  SELECT member_id, group_number FROM (
+    SELECT TRIM(memberid) AS member_id,
+           COALESCE(
+             coverage:plans[0]:groupNumber::string,
+             coverage:planInformation:groupNumber::string,
+             coverage:PlanCoverageSummary:GroupNumber::string
+           ) AS group_number,
+           ROW_NUMBER() OVER (
+             PARTITION BY TRIM(memberid)
+             ORDER BY __HEVO__SOURCE_MODIFIED_AT DESC NULLS LAST
+           ) AS rn
+    FROM prod_raw.raw_air_mongo.coverage_entities
+    WHERE COALESCE(
+             coverage:plans[0]:groupNumber::string,
+             coverage:planInformation:groupNumber::string,
+             coverage:PlanCoverageSummary:GroupNumber::string
+          ) IS NOT NULL
+  )
+  WHERE rn = 1
 ),
 target_group AS (
   SELECT group_number FROM member_group WHERE member_id = TRIM(:2)
@@ -367,6 +376,7 @@ saturated AS (
   JOIN member_group mg ON TRIM(c.insurance_member_id) = mg.member_id
   WHERE c.source_system = 'EXPERITY'
     AND c.pnr IS NOT NULL
+    AND TRIM(c.insurance_member_id) <> TRIM(:2)   -- exclude the pricing member (own-history covers them; keeps the group signal independent)
     AND c.date_of_service <  TO_DATE(:1)
     AND c.date_of_service >= DATEADD('year', -2, TO_DATE(:1))
 )
