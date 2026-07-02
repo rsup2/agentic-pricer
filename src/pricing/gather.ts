@@ -79,7 +79,10 @@ export type SrtContext = {
 };
 
 /** 1a + 1b: payer Stedi id, the effective provider NPI, and the STC chain per SRT. */
-export async function gatherPayerAndStc(dto: PricingRequestDto): Promise<{
+export async function gatherPayerAndStc(
+  dto: PricingRequestDto,
+  opts: { skipStediProbe?: boolean } = {},
+): Promise<{
   payerStediId: string | null;
   providerNpi: string | null;
   providerFirstName: string | null;
@@ -128,7 +131,11 @@ export async function gatherPayerAndStc(dto: PricingRequestDto): Promise<{
   // Pick the first candidate id that Stedi actually accepts. Probe with STC 30
   // (plan-level) since it's the cheapest universal check; the first ok:true wins.
   // The probe needs the same provider (NPI + last name) the full run will use.
-  const payerStediId = await pickWorkingPayerId(dto, payerCandidates, provider);
+  // Skipped when AIR forwarded eligibility — we won't call Stedi, so no id needed
+  // (and this avoids a redundant Stedi probe on the preferred path).
+  const payerStediId = opts.skipStediProbe
+    ? null
+    : await pickWorkingPayerId(dto, payerCandidates, provider);
 
   const dbDefaults = new Map<number, StcChain>();
   for (const row of stcRows) {

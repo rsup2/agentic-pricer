@@ -32,13 +32,18 @@ function toCcyymmdd(d: string): string {
   return d.replace(/-/g, '').slice(0, 8);
 }
 
-/** A single eligibility check for one STC set. Never throws — returns a tagged result. */
-export async function checkEligibility(
-  input: StediEligibilityInput,
-): Promise<
+/**
+ * The tagged result of one eligibility check. Exported so anything that
+ * PRODUCES this shape without calling Stedi (e.g. the AIR eligibility adapter)
+ * stays in lockstep with it — a future required field becomes a compile error
+ * there instead of a silent runtime gap.
+ */
+export type StediResult =
   | { ok: true; stc: string; response: Record<string, unknown> }
-  | { ok: false; stc: string; error: string }
-> {
+  | { ok: false; stc: string; error: string };
+
+/** A single eligibility check for one STC set. Never throws — returns a tagged result. */
+export async function checkEligibility(input: StediEligibilityInput): Promise<StediResult> {
   const stc = input.serviceTypeCodes.join(',');
   const body: Record<string, unknown> = {
     tradingPartnerServiceId: input.tradingPartnerServiceId,

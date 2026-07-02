@@ -51,6 +51,11 @@ CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
     PRICER_VERSION         STRING,                    -- short git SHA (APTIBLE_GIT_COMMIT_SHA), 'dev' locally; the build key
     PRICER_COMMIT_URL      STRING,                    -- GitHub commit link (APTIBLE_GIT_COMMIT_URL); PR is one click away
 
+    -- eligibility provenance: 'air' (AIR forwarded eligibility, own Stedi skipped) /
+    -- 'self' (own Stedi call) / 'none' (run failed before eligibility). Lets the
+    -- shadow-vs-AIR comparison separate the preferred feed path from the fallback.
+    ELIGIBILITY_SOURCE     STRING,
+
     CREATED_AT             TIMESTAMP_NTZ DEFAULT CURRENT_TIMESTAMP()
 );
 
@@ -64,3 +69,6 @@ CREATE TABLE IF NOT EXISTS ALE.ALE_DEV.AGENTIC_PRICER_RESULTS (
 -- Version provenance columns — run these to add them to the existing ALE_DEV table:
 --   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS PRICER_VERSION STRING;
 --   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS PRICER_COMMIT_URL STRING;
+
+-- Eligibility-source marker — run this to add it to the existing ALE_DEV table:
+--   ALTER TABLE ALE.ALE_DEV.AGENTIC_PRICER_RESULTS ADD COLUMN IF NOT EXISTS ELIGIBILITY_SOURCE STRING;
